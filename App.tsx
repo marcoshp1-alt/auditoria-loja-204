@@ -1,0 +1,796 @@
+
+import React, { useState, useRef, useMemo, useEffect, useCallback, startTransition } from 'react';
+import FileUpload from './components/FileUpload';
+import AuditTable from './components/AuditTable';
+import AuditCharts from './components/AuditCharts';
+import SummaryStats from './components/SummaryStats';
+import HistorySidebar from './components/HistorySidebar';
+import AuthScreen from './components/AuthScreen';
+import AdminPanel from './components/AdminPanel';
+import WeeklySummary from './components/WeeklySummary';
+import ModalConfirm from './components/ModalConfirm';
+import DetailedProductList from './components/DetailedProductList';
+import CollaboratorRanking from './components/CollaboratorRanking';
+import PasswordChangeModal from './components/PasswordChangeModal';
+import Toast from './components/Toast';
+import { AuditRow, ClassDetailRow, HistoryItem, UserProfile } from './types';
+import { parseExcelFile, parseAnalysisFile, parseProductClassFile } from './services/excelService';
+import { fetchHistory, addHistoryItem, deleteHistoryItemById, deleteAllHistory, fetchHistoryItemDetails } from './services/historyService';
+import { supabase } from './services/supabaseClient';
+import { LayoutDashboard, RefreshCcw, Download, Copy, Package, EyeOff, Activity, BarChart2, FileSpreadsheet, Menu, CloudOff, Cloud, ShieldAlert, Loader2, Calendar, LayoutGrid, FileSearch, Hash, Check, Database, Terminal, Copy as CopyIcon, X } from 'lucide-react';
+import html2canvas from 'html2canvas';
+
+type ReportType = 'audit' | 'analysis' | 'class';
+type ViewType = 'dashboard' | 'admin' | 'weekly';
+
+const App: React.FC = () => {
+  // 1. STATE HOOKS
+  const [session, setSession] = useState<any>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [currentView, setCurrentView] = useState<ViewType>('dashboard');
+
+  const [data, setData] = useState<AuditRow[]>([]);
+  const [classDetails, setClassDetails] = useState<ClassDetailRow[]>([]);
+  const [classCategoryStats, setClassCategoryStats] = useState<any>(null);
+  const [classCollaboratorStats, setClassCollaboratorStats] = useState<{ [name: string]: number } | null>(null);
+  
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [isCollaboratorView, setIsCollaboratorView] = useState(false);
+
+  const [loading, setLoading] = useState(false);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportType, setReportType] = useState<ReportType>('audit');
+  const [customDate, setCustomDate] = useState<string | null>(null);
+  const [activeReportId, setActiveReportId] = useState<string>('');
+  const [activeLoja, setActiveLoja] = useState<string>('');
+  
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(() => {
+    if (typeof window !== 'undefined') return window.innerWidth >= 1024;
+    return true;
+  });
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [hasAutoSelected, setHasAutoSelected] = useState(false);
+
+  // Pull to Refresh State
+  const [pullDistance, setPullDistance] = useState(0);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const touchStartRef = useRef<number | null>(null);
+
+  // Modal & Toast States
+  const [deleteModal, setDeleteModal] = useState<{ isOpen: boolean; id: string; name: string }>({ isOpen: false, id: '', name: '' });
+  const [clearAllModal, setClearAllModal] = useState(false);
+  const [dbErrorModal, setDbErrorModal] = useState<{ isOpen: boolean; message: string; sql: string }>({ isOpen: false, message: '', sql: '' });
+  const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
+  const [toast, setToast] = useState<{ visible: boolean; message: string }>({ visible: false, message: '' });
+  
+  // Sku Modal State
+  const [skuModal, setSkuModal] = useState<{ isOpen: boolean; pendingFile?: File; pendingResult?: any; pendingDate?: string | null }>({ isOpen: false });
+  const [manualSku, setManualSku] = useState<string>('');
+
+  const reportRef = useRef<HTMLDivElement>(null);
+
+  const showToast = useCallback((message: string) => setToast({ visible: true, message }), []);
+
+  // 2. HELPER FUNCTIONS
+  const fetchProfile = useCallback(async (user: any) => {
+    try {
+      const jwtMetadata = user.user_metadata || {};
+      const usernameFromEmail = user.email?.split('@')[0] || 'usuário';
+      const isSystemAdmin = jwtMetadata.role === 'admin' || usernameFromEmail.toLowerCase() === 'admin';
+
+      const { data: profileData } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .maybeSingle();
+
+      const mergedProfile: UserProfile = {
+        id: user.id,
+        username: profileData?.username || jwtMetadata.display_name || usernameFromEmail,
+        role: isSystemAdmin ? 'admin' : (profileData?.role || jwtMetadata.role || 'user'),
+        loja: profileData?.loja || jwtMetadata.loja || '204'
+      };
+
+      setProfile(mergedProfile);
+      setActiveLoja(prev => prev || mergedProfile.loja);
+    } catch (err) {
+      console.error("Erro no carregamento do perfil:", err);
+    } finally {
+      setAuthLoading(false);
+    }
+  }, []);
+
+  const loadHistory = useCallback(async () => {
+    if (!profile) return;
+    setIsSyncing(true);
+    try {
+      const remoteHistory = await fetchHistory(profile);
+      setHistory(remoteHistory || []);
+    } catch (e) {
+      console.error("Histórico não pôde ser carregado:", e);
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [profile]);
+
+  // Pull to Refresh Handlers
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (window.scrollY <= 0) {
+      touchStartRef.current = e.touches[0].pageY;
+    } else {
+      touchStartRef.current = null;
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (touchStartRef.current !== null && !isRefreshing) {
+      const currentY = e.touches[0].pageY;
+      const diff = currentY - touchStartRef.current;
+      if (diff > 0) {
+        // Logarithmic resistance for smoother pull feel
+        const resistance = 0.4;
+        const newDist = Math.min(diff * resistance, 160);
+        setPullDistance(newDist);
+      }
+    }
+  };
+
+  const handleTouchEnd = () => {
+    if (pullDistance > 120) {
+      setIsRefreshing(true);
+      setPullDistance(80);
+      window.location.reload();
+    } else {
+      setPullDistance(0);
+    }
+    touchStartRef.current = null;
+  };
+
+  const handleSignOut = useCallback(async () => {
+    await supabase.auth.signOut();
+  }, []);
+
+  const addToHistory = async (newData: AuditRow[], type: ReportType, file: File, date: string | null, details?: ClassDetailRow[], categoryStats?: any, collaboratorStats?: any, overrideSku?: number) => {
+    if (!session || !profile) return;
+    
+    let totalSku = overrideSku || newData.reduce((acc, curr) => acc + curr.sku, 0);
+    const totalNotRead = newData.reduce((acc, curr) => acc + curr.notRead, 0);
+    
+    const hasOutdatedData = newData.some(row => row.outdated !== undefined);
+    const totalOutdated = hasOutdatedData 
+      ? newData.reduce((acc, curr) => acc + (curr.outdated || 0), 0)
+      : undefined;
+
+    const generalPartial = totalSku > 0 ? (totalNotRead / totalSku) * 100 : 0;
+    
+    setActiveLoja(profile.loja);
+
+    const newItem: HistoryItem = {
+      id: '', 
+      timestamp: Date.now(), 
+      fileName: file.name, 
+      reportType: type, 
+      data: newData, 
+      classDetails: details || [],
+      categoryStats: categoryStats || null,
+      collaboratorStats: collaboratorStats || null,
+      stats: { totalSku, totalNotRead, totalOutdated, generalPartial },
+      customDate: date,
+      loja: profile.loja
+    };
+
+    setIsSyncing(true);
+    try {
+      await addHistoryItem(newItem);
+      const updatedHistory = await fetchHistory(profile);
+      setHistory(updatedHistory || []);
+      
+      const savedItem = updatedHistory[0]; 
+      if (savedItem) {
+        setActiveReportId(savedItem.id);
+      }
+    } catch (e: any) {
+      console.error("Erro ao salvar no Supabase:", e);
+      if (e.code === 'MISSING_COLUMNS' && e.sql) {
+        setDbErrorModal({ isOpen: true, message: e.message, sql: e.sql });
+      } else {
+        showToast("Erro ao salvar no banco de dados.");
+      }
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleHistorySelect = useCallback(async (item: HistoryItem) => {
+    setReportLoading(true);
+    try {
+      let detailedData = item.data;
+      let detailedClass = item.classDetails;
+      let detailedCatStats = item.categoryStats;
+      let detailedCollStats = item.collaboratorStats;
+
+      if (!detailedData || detailedData.length === 0) {
+        const details = await fetchHistoryItemDetails(item.id);
+        detailedData = details.data;
+        detailedClass = details.classDetails;
+        detailedCatStats = details.categoryStats;
+        detailedCollStats = details.collaboratorStats;
+      }
+
+      startTransition(() => {
+        setData(detailedData || []);
+        setReportType(item.reportType);
+        setCustomDate(item.customDate);
+        setActiveReportId(item.id);
+        setActiveLoja(item.loja);
+        setClassDetails(detailedClass || []);
+        setClassCategoryStats(detailedCatStats || null);
+        setClassCollaboratorStats(detailedCollStats || null);
+        setSelectedCategory(null);
+        setIsCollaboratorView(false);
+        setCurrentView('dashboard');
+      });
+    } catch (err) {
+      console.error("Erro ao carregar detalhes do relatório:", err);
+      showToast("Erro ao carregar dados do histórico.");
+    } finally {
+      setReportLoading(false);
+    }
+
+    if (window.innerWidth < 1024) setIsSidebarOpen(false);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [profile, showToast]);
+
+  const handleClassFileSelect = async (file: File, date: string | null) => {
+    setLoading(true);
+    setReportType('class');
+    setCustomDate(date);
+    
+    try {
+      const result = await parseProductClassFile(file);
+      const targetDate = date || new Date().toLocaleDateString('en-CA');
+      
+      const sameDayAudit = history.find(h => {
+        const hDate = h.customDate || new Date(h.timestamp).toLocaleDateString('en-CA');
+        return hDate === targetDate && 
+               h.reportType !== 'class' && 
+               h.loja === profile?.loja && 
+               h.stats.totalSku > 0;
+      });
+
+      if (sameDayAudit) {
+        const skuDoDia = sameDayAudit.stats.totalSku;
+        startTransition(() => {
+          setData(result.summary); 
+          setClassDetails(result.details); 
+          setClassCategoryStats(result.categoryStats);
+          setClassCollaboratorStats(result.collaboratorStats);
+          setSelectedCategory(null);
+          setIsCollaboratorView(false);
+        });
+        await addToHistory(result.summary, 'class', file, date, result.details, result.categoryStats, result.collaboratorStats, skuDoDia);
+      } else {
+        setSkuModal({ isOpen: true, pendingFile: file, pendingResult: result, pendingDate: date });
+      }
+    } catch (error) { 
+      console.error(error); 
+    } finally { 
+      setLoading(false); 
+    }
+  };
+
+  const handleManualSkuSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const sku = parseInt(manualSku);
+    if (isNaN(sku) || sku <= 0) {
+      showToast("SKU Inválido!");
+      return;
+    }
+
+    if (skuModal.pendingResult && skuModal.pendingFile) {
+      const result = skuModal.pendingResult;
+      startTransition(() => {
+        setData(result.summary); 
+        setClassDetails(result.details); 
+        setClassCategoryStats(result.categoryStats);
+        setClassCollaboratorStats(result.collaboratorStats);
+        setSelectedCategory(null);
+        setIsCollaboratorView(false);
+      });
+      await addToHistory(result.summary, 'class', skuModal.pendingFile, skuModal.pendingDate || null, result.details, result.categoryStats, result.collaboratorStats, sku);
+    }
+
+    setSkuModal({ isOpen: false });
+    setManualSku('');
+  };
+
+  const confirmClearAll = async () => {
+    setIsSyncing(true);
+    try {
+      await deleteAllHistory();
+      setHistory([]);
+      setData([]);
+      setClassDetails([]);
+      setActiveReportId('');
+      setClearAllModal(false);
+      showToast("Histórico limpo!");
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const confirmDeleteHistory = async () => {
+    setIsSyncing(true);
+    try {
+      await deleteHistoryItemById(deleteModal.id);
+      
+      if (deleteModal.id === activeReportId) {
+        startTransition(() => {
+          setData([]);
+          setClassDetails([]);
+          setClassCategoryStats(null);
+          setClassCollaboratorStats(null);
+          setActiveReportId('');
+        });
+      }
+      
+      setHistory(prev => prev.filter(item => item.id !== deleteModal.id));
+      setDeleteModal({ isOpen: false, id: '', name: '' });
+      showToast("Auditoria removida!");
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleAuditFileSelect = async (file: File, date: string | null) => {
+    setLoading(true); setReportType('audit'); setCustomDate(date);
+    try {
+      const parsedData = await parseExcelFile(file);
+      startTransition(() => {
+        setData(parsedData); 
+        setClassDetails([]); setClassCategoryStats(null); setClassCollaboratorStats(null);
+      });
+      await addToHistory(parsedData, 'audit', file, date);
+      showToast("Arquivo importado!");
+    } catch (error) { 
+      console.error(error);
+      showToast("Erro ao ler o arquivo.");
+    } finally { setLoading(false); }
+  };
+
+  const handleAnalysisFileSelect = async (file: File, date: string | null) => {
+    setLoading(true); setReportType('analysis'); setCustomDate(date);
+    try {
+      const parsedData = await parseAnalysisFile(file);
+      startTransition(() => {
+        setData(parsedData); 
+        setClassDetails([]); setClassCategoryStats(null); setClassCollaboratorStats(null);
+      });
+      await addToHistory(parsedData, 'analysis', file, date);
+      showToast("Arquivo importado!");
+    } catch (error) { console.error(error); } finally { setLoading(false); }
+  };
+
+  const triggerHeaderFileUpload = useCallback(() => {
+    startTransition(() => {
+      setData([]); setClassDetails([]); setCustomDate(null); setClassCategoryStats(null); setClassCollaboratorStats(null); setSelectedCategory(null); setIsCollaboratorView(false); setCurrentView('dashboard'); setActiveReportId('');
+      if (profile) setActiveLoja(profile.loja);
+    });
+  }, [profile]);
+
+  const getReportInfo = () => {
+    const lojaNum = activeLoja || profile?.loja || '---';
+    const histItem = history.find(h => h.id === activeReportId);
+    const dateToUse = customDate ? new Date(customDate + 'T12:00:00') : new Date(histItem?.timestamp || Date.now());
+    const dayOfWeek = dateToUse.getDay();
+
+    let title = "";
+    if (reportType === 'audit') {
+      if (dayOfWeek === 1) title = `Auditoria de Etiqueta`;
+      else if (dayOfWeek === 2) title = `Auditoria de Presença`;
+      else if (dayOfWeek === 3) title = `Auditoria de Ruptura`;
+      else if (dayOfWeek === 4) title = `Auditoria de Etiqueta`;
+      else title = `Auditoria Parcial`;
+    } else if (reportType === 'analysis') {
+      title = `Resultado Auditoria`;
+    } else {
+      title = `Não Lidos por Classe`;
+    }
+
+    return { title, store: `Loja ${lojaNum}` };
+  };
+
+  const getFormattedDateLabel = () => {
+    const histItem = history.find(h => h.id === activeReportId);
+    if (!activeReportId && !customDate) return "";
+    if (customDate) {
+      const parts = customDate.split('-');
+      if (parts.length === 3) {
+        const [y, m, d] = parts;
+        return `${d}/${m}/${y}`;
+      }
+    }
+    return new Date(histItem?.timestamp || Date.now()).toLocaleString('pt-BR', {
+      day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'
+    }).replace(',', ' às');
+  };
+
+  const handleExportImage = async () => {
+    if (!reportRef.current) return;
+    try {
+      const canvas = await html2canvas(reportRef.current, { scale: 2, backgroundColor: '#f1f5f9' });
+      const link = document.createElement("a");
+      link.href = canvas.toDataURL("image/png");
+      link.download = `Relatorio_${reportType}_Loja_${activeLoja}.png`;
+      link.click();
+      showToast("Relatório baixado!");
+    } catch (err) {
+      console.error("Erro exportando imagem:", err);
+    }
+  };
+
+  const handleCopyReport = async () => {
+    if (!reportRef.current) return;
+    try {
+      const canvas = await html2canvas(reportRef.current, { scale: 2, backgroundColor: '#f1f5f9' });
+      canvas.toBlob(async (blob) => {
+        if (blob && navigator.clipboard) {
+          await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+          showToast("Imagem copiada!");
+        }
+      });
+    } catch (err) {
+      console.error("Erro copiando imagem:", err);
+    }
+  };
+
+  // 3. MEMO HOOKS
+  const currentStats = useMemo(() => {
+    if (data.length === 0 && !reportLoading) return { totalSku: 0, totalNotRead: 0, totalOutdated: undefined, generalPartial: 0, isSyncing: false };
+
+    const histItem = history.find(h => h.id === activeReportId);
+    const totalNotRead = data.reduce((acc, curr) => acc + curr.notRead, 0);
+    
+    const hasOutdatedData = data.some(row => row.outdated !== undefined);
+    const totalOutdated = hasOutdatedData 
+      ? data.reduce((acc, curr) => acc + (curr.outdated || 0), 0)
+      : undefined;
+
+    let totalSku = histItem ? histItem.stats.totalSku : data.reduce((acc, curr) => acc + curr.sku, 0);
+    
+    if (reportType === 'class' && !histItem && !loading && !skuModal.isOpen && totalSku === totalNotRead) {
+        totalSku = 0; 
+    }
+
+    const generalPartial = totalSku > 0 ? (totalNotRead / totalSku) * 100 : 0;
+
+    return { 
+        totalSku, 
+        totalNotRead, 
+        totalOutdated,
+        generalPartial, 
+        isSyncing: loading || reportLoading 
+    };
+  }, [data, history, activeReportId, reportType, loading, reportLoading, skuModal.isOpen]);
+
+  const filteredDetailedRows = useMemo(() => {
+    if (!selectedCategory) return [];
+    const catLow = selectedCategory.toLowerCase();
+    
+    return classDetails.filter(row => {
+      const sitLow = row.situacao.toLowerCase();
+      
+      if (catLow === 'total_not_read') {
+        const isOutOfStock = sitLow.includes('sem estoque');
+        const isOutdated = sitLow.includes('desatualizado');
+        if (isOutOfStock || isOutdated) return false;
+
+        const isNoRead = (sitLow.includes('não lido') || sitLow.includes('não lidos')) && sitLow.includes('estoque');
+        const isNoPresence = sitLow.includes('sem presença') && sitLow.includes('estoque');
+        
+        return (isNoRead || isNoPresence) && (row.estoque > 0 || sitLow.includes('com estoque'));
+      }
+      
+      if (catLow.includes('não lido')) {
+        return (sitLow.includes('não lido') || sitLow.includes('não lidos')) && sitLow.includes('estoque');
+      }
+      if (catLow.includes('presença')) {
+        return sitLow.includes('sem presença') && sitLow.includes('estoque');
+      }
+      return sitLow === catLow;
+    });
+  }, [classDetails, selectedCategory]);
+
+  // 4. EFFECT HOOKS
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session: initialSession } }) => {
+      setSession(initialSession);
+      if (initialSession) fetchProfile(initialSession.user);
+      else setAuthLoading(false);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+      if (newSession) fetchProfile(newSession.user);
+      else {
+        setProfile(null);
+        setHistory([]);
+        setData([]);
+        setHasAutoSelected(false);
+        setCurrentView('dashboard');
+        setActiveLoja('');
+        setAuthLoading(false);
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, [fetchProfile]);
+
+  useEffect(() => {
+    if (session && profile) {
+      loadHistory();
+    }
+  }, [session, profile, loadHistory]);
+
+  useEffect(() => {
+    if (history.length > 0 && !hasAutoSelected && data.length === 0 && classDetails.length === 0 && currentView === 'dashboard') {
+      const today = new Date().toLocaleDateString('en-CA');
+      const todayItems = history.filter(item => {
+        const itemDate = item.customDate || new Date(item.timestamp).toLocaleDateString('en-CA');
+        return itemDate === today;
+      });
+      if (todayItems.length > 0) handleHistorySelect(todayItems[0]);
+      setHasAutoSelected(true);
+    }
+  }, [history, hasAutoSelected, data.length, classDetails.length, currentView, handleHistorySelect]);
+
+  if (authLoading) return <div className="min-h-screen flex items-center justify-center bg-slate-100"><Loader2 className="animate-spin h-12 w-12 text-blue-600" /></div>;
+  if (!session) return <AuthScreen onLoginSuccess={() => {}} />;
+
+  const reportInfo = getReportInfo();
+  const hasData = (data && data.length > 0) || (classDetails && classDetails.length > 0);
+  const canEdit = profile?.role === 'admin' || profile?.role === 'user';
+
+  return (
+    <div 
+      className="min-h-screen bg-slate-100 text-slate-800 overscroll-none"
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+    >
+      {/* Pull to Refresh Indicator */}
+      <div 
+        className="fixed top-0 left-0 right-0 z-[200] flex justify-center pointer-events-none transition-transform duration-200"
+        style={{ transform: `translateY(${pullDistance - 50}px)` }}
+      >
+        <div className={`bg-white rounded-full shadow-xl border border-blue-100 p-2.5 flex items-center justify-center transition-all ${pullDistance > 120 ? 'scale-110 shadow-blue-200' : 'scale-90 opacity-60'}`}>
+          <RefreshCcw 
+            className={`w-6 h-6 text-blue-600 ${isRefreshing ? 'animate-spin' : ''}`} 
+            style={{ transform: `rotate(${pullDistance * 3}deg)` }}
+          />
+        </div>
+      </div>
+
+      <HistorySidebar 
+        history={history} onSelect={handleHistorySelect} onClearAll={() => setClearAllModal(true)}
+        activeReportId={activeReportId}
+        onDelete={(id) => {
+          const item = history.find(h => h.id === id);
+          setDeleteModal({ isOpen: true, id, name: item?.fileName || 'esta auditoria' });
+        }}
+        isOpen={isSidebarOpen} toggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
+        onSignOut={handleSignOut} userEmail={profile?.username}
+        isAdmin={profile?.role === 'admin'} role={profile?.role} loja={profile?.loja}
+        onOpenAdmin={() => setCurrentView('admin')} onOpenDashboard={() => setCurrentView('dashboard')} onOpenWeekly={() => setCurrentView('weekly')}
+        onOpenPasswordChange={() => setIsPasswordModalOpen(true)}
+        activeView={currentView}
+      />
+
+      <div className={`transition-all duration-300 ease-in-out ${isSidebarOpen ? 'lg:ml-72' : 'lg:ml-0'}`}>
+        <header className="bg-white shadow-sm border-b border-slate-200 sticky top-0 z-10 h-20 flex items-center px-4 md:px-8">
+           <div className="flex items-center gap-3 flex-1">
+             <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 rounded-md hover:bg-slate-100 lg:hidden"><Menu className="w-6 h-6" /></button>
+             <div className={`p-2 rounded-lg transition-colors shadow-lg ${currentView === 'admin' ? 'bg-indigo-600' : currentView === 'weekly' ? 'bg-emerald-600' : 'bg-blue-600'}`}><LayoutDashboard className="w-6 h-6 text-white" /></div>
+             <h1 className="text-xl md:text-2xl font-black uppercase tracking-tight truncate">{currentView === 'admin' ? 'Administração' : currentView === 'weekly' ? 'Semanal' : 'Auditoria'}</h1>
+           </div>
+           {currentView === 'dashboard' && hasData && (
+             <div className="flex gap-2">
+               <button onClick={handleCopyReport} className="p-2 text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"><CopyIcon className="w-5 h-5" /></button>
+               <button onClick={handleExportImage} className="p-2 text-purple-600 bg-purple-50 rounded-lg hover:bg-purple-100 transition-colors"><Download className="w-5 h-5" /></button>
+               {canEdit && <button onClick={triggerHeaderFileUpload} className="p-2 text-emerald-600 bg-emerald-50 rounded-lg hover:bg-emerald-100 transition-colors"><RefreshCcw className="w-5 h-5" /></button>}
+             </div>
+           )}
+        </header>
+
+        <main className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-8 min-h-[calc(100vh-80px)]">
+          {reportLoading && (
+            <div className="fixed inset-0 bg-white/60 backdrop-blur-sm z-50 flex flex-col items-center justify-center">
+              <Loader2 className="w-12 h-12 text-blue-600 animate-spin mb-4" />
+              <p className="text-slate-600 font-black uppercase tracking-widest text-xs">Carregando detalhes do relatório...</p>
+            </div>
+          )}
+
+          {currentView === 'admin' ? <AdminPanel onShowToast={showToast} /> : currentView === 'weekly' ? <WeeklySummary history={history} userProfile={profile} onSelectAudit={handleHistorySelect} /> : (
+            !hasData ? (
+              canEdit ? <div className="mt-10 grid grid-cols-1 md:grid-cols-3 gap-6 max-w-7xl mx-auto"><FileUpload onFileSelect={handleAuditFileSelect} isLoading={loading} title="Importar Auditoria" subtitle="Planilha Parcial" variant="blue"/><FileUpload onFileSelect={handleAnalysisFileSelect} isLoading={loading} title="Importar Análise" subtitle="Planilha Detalhada" variant="purple"/><FileUpload onFileSelect={handleClassFileSelect} isLoading={loading} title="Classe de Produto" subtitle="Itens por Classe" variant="orange"/></div> : 
+              <div className="mt-20 flex flex-col items-center text-center"><div className="bg-white p-12 rounded-[50px] shadow-2xl max-w-lg"><FileSearch className="w-12 h-12 text-slate-300 mx-auto mb-8"/><h3 className="text-2xl font-black mb-4 uppercase">Visualização de Dados</h3><p className="text-slate-500">Selecione um relatório no menu lateral para visualizar os dados salvos.</p></div></div>
+            ) : (
+              <div ref={reportRef} key={activeReportId || 'new'} className="animate-in fade-in slide-in-from-top-4 duration-500">
+                <div className="flex flex-col gap-1 mb-6 text-center md:text-left">
+                  <h2 className="text-2xl md:text-3xl font-black text-slate-800 tracking-tight uppercase leading-tight">
+                    <span className="block md:inline">{reportInfo.title}</span>
+                    <span className="block md:inline md:ml-2">{reportInfo.store}</span>
+                  </h2>
+                </div>
+                
+                <SummaryStats 
+                  data={data} 
+                  isAnalysis={reportType === 'analysis'} 
+                  isClassReport={reportType === 'class'} 
+                  categoryStats={classCategoryStats}
+                  collaboratorStats={classCollaboratorStats || {}}
+                  selectedCategory={selectedCategory}
+                  isCollaboratorView={isCollaboratorView}
+                  onCategoryClick={(cat) => {
+                      setIsCollaboratorView(false);
+                      setSelectedCategory(cat === selectedCategory ? null : cat);
+                  }}
+                  onCollaboratorClick={() => {
+                      setSelectedCategory(null);
+                      setIsCollaboratorView(!isCollaboratorView);
+                  }}
+                  overrideStats={currentStats}
+                />
+
+                {isCollaboratorView && classCollaboratorStats ? (
+                   <div className="mb-10">
+                      <CollaboratorRanking 
+                        stats={classCollaboratorStats}
+                        onClose={() => setIsCollaboratorView(false)}
+                      />
+                   </div>
+                ) : selectedCategory ? (
+                   <div className="mb-10">
+                      <DetailedProductList 
+                        data={filteredDetailedRows} 
+                        category={selectedCategory} 
+                        onClose={() => setSelectedCategory(null)} 
+                        onShowToast={showToast}
+                      />
+                   </div>
+                ) : (
+                  <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
+                    {data && data.length > 0 && (
+                      <div className={`${reportType === 'class' ? 'xl:col-span-12' : 'xl:col-span-8'}`}>
+                        <AuditTable 
+                          data={data} 
+                          isAnalysis={reportType === 'analysis'} 
+                          isClassReport={reportType === 'class'} 
+                          dateLabel={getFormattedDateLabel()}
+                        />
+                      </div>
+                    )}
+                    {reportType !== 'class' && data && data.length > 0 && <div className="xl:col-span-4"><AuditCharts data={data} /></div>}
+                  </div>
+                )}
+              </div>
+            )
+          )}
+        </main>
+      </div>
+
+      {dbErrorModal.isOpen && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xl z-[150] flex items-center justify-center p-4">
+          <div className="bg-white rounded-[40px] shadow-2xl w-full max-w-2xl overflow-hidden animate-in zoom-in-95 duration-300 border border-red-100">
+            <div className="px-10 py-10 bg-red-50 flex flex-col items-center text-center relative">
+              <button onClick={() => setDbErrorModal({ ...dbErrorModal, isOpen: false })} className="absolute top-6 right-6 text-red-300 hover:text-red-500 p-2 hover:bg-white/50 rounded-full transition-all"><X className="w-7 h-7" /></button>
+              <div className="bg-red-600 p-6 rounded-[28px] shadow-xl shadow-red-200 mb-8 scale-110"><Database className="w-10 h-10 text-white" /></div>
+              <h3 className="text-3xl font-black text-slate-800 uppercase tracking-tight mb-4 leading-tight">{dbErrorModal.message}</h3>
+              <p className="text-slate-500 font-bold text-sm leading-relaxed px-10">Para utilizar relatórios de classe, você precisa adicionar novas colunas à sua tabela no Supabase. Copie o script abaixo e execute no seu <strong>SQL Editor</strong>.</p>
+            </div>
+            
+            <div className="p-8 space-y-6">
+              <div className="bg-slate-900 rounded-3xl p-6 border-2 border-slate-800 relative group overflow-hidden">
+                <div className="flex items-center justify-between mb-4 border-b border-slate-800 pb-3">
+                  <div className="flex items-center gap-2">
+                    <Terminal className="w-4 h-4 text-emerald-400" />
+                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Script SQL de Reparo</span>
+                  </div>
+                  <button onClick={() => { navigator.clipboard.writeText(dbErrorModal.sql); showToast("SQL Copiado!"); }} className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all active:scale-90"><CopyIcon className="w-3.5 h-3.5" /> Copiar Código</button>
+                </div>
+                <pre className="font-mono text-[11px] text-emerald-400 overflow-x-auto whitespace-pre-wrap leading-relaxed select-all py-2 max-h-[150px] custom-scrollbar">
+                  {dbErrorModal.sql}
+                </pre>
+              </div>
+
+              <div className="flex gap-4">
+                 <button onClick={() => setDbErrorModal({ ...dbErrorModal, isOpen: false })} className="w-full bg-slate-800 hover:bg-black text-white font-black py-4.5 rounded-2xl shadow-xl transition-all active:scale-95 uppercase text-[10px] tracking-widest">Entendi, Vou Executar</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {skuModal.isOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[110] flex items-center justify-center p-4">
+          <div className="bg-white rounded-[40px] shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-300">
+            <div className="p-10 bg-blue-50 flex flex-col items-center text-center">
+              <div className="bg-blue-600 p-5 rounded-[24px] shadow-xl mb-6">
+                <Hash className="w-8 h-8 text-white" />
+              </div>
+              <h3 className="text-2xl font-black text-slate-800 uppercase tracking-tight mb-3">Informar SKU</h3>
+              <p className="text-slate-500 font-bold text-sm leading-relaxed mb-6">
+                Não encontramos uma auditoria para este dia. Informe o total de SKU da loja para calcularmos a parcial do relatório de classe.
+              </p>
+              
+              <form onSubmit={handleManualSkuSubmit} className="w-full space-y-4">
+                <input 
+                  type="number"
+                  required
+                  autoFocus
+                  value={manualSku}
+                  onChange={(e) => setManualSku(e.target.value)}
+                  placeholder="Ex: 12500"
+                  className="w-full px-6 py-4 bg-white border-2 border-blue-100 rounded-2xl font-black text-slate-700 focus:border-blue-500 outline-none text-center text-2xl transition-all"
+                />
+                
+                <div className="flex gap-4 pt-2">
+                  <button 
+                    type="button" 
+                    onClick={() => {
+                        setSkuModal({ isOpen: false });
+                        if (!history.some(h => h.id === activeReportId)) {
+                            setData([]);
+                            setClassDetails([]);
+                            setActiveReportId('');
+                        }
+                    }}
+                    className="flex-1 px-6 py-4 rounded-2xl font-black text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-all uppercase text-[10px] tracking-widest"
+                  >
+                    Ignorar SKU
+                  </button>
+                  <button 
+                    type="submit"
+                    className="flex-[2] bg-blue-600 hover:bg-blue-700 text-white font-black py-4.5 rounded-2xl shadow-xl shadow-blue-100 flex items-center justify-center gap-2 active:scale-95 uppercase text-[10px] tracking-widest"
+                  >
+                    <Check className="w-4 h-4" /> Confirmar SKU
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <ModalConfirm 
+        isOpen={deleteModal.isOpen} onClose={() => setDeleteModal({ ...deleteModal, isOpen: false })}
+        onConfirm={confirmDeleteHistory} title="Excluir Auditoria?"
+        message={`Deseja remover o registro "${deleteModal.name}"? Esta ação não pode ser desfeita.`}
+        confirmLabel="Remover" isLoading={isSyncing} variant="danger"
+      />
+
+      <ModalConfirm 
+        isOpen={clearAllModal} onClose={() => setClearAllModal(false)}
+        onConfirm={confirmClearAll} title="Limpar Histórico?"
+        message="Deseja remover TODOS os registros do seu histórico? Esta ação é irreversível."
+        confirmLabel="Limpar Tudo" isLoading={isSyncing} variant="danger"
+      />
+
+      <PasswordChangeModal 
+        isOpen={isPasswordModalOpen} 
+        onClose={() => setIsPasswordModalOpen(false)} 
+        username={profile?.username || ''} 
+      />
+
+      <Toast 
+        isVisible={toast.visible} 
+        message={toast.message} 
+        onClose={() => setToast({ ...toast, visible: false })} 
+      />
+    </div>
+  );
+};
+
+export default App;
