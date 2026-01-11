@@ -11,8 +11,6 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     define: {
-      // Stringify the API key to inject it into the client-side code safely during build
-      'process.env.API_KEY': JSON.stringify(env.API_KEY),
       // Polyfill process.env to prevent crashes in libraries that expect it
       'process.env': {}
     },
