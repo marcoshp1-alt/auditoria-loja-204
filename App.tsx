@@ -854,7 +854,7 @@ const App: React.FC = () => {
               <button onClick={() => setDbErrorModal({ ...dbErrorModal, isOpen: false })} className="absolute top-6 right-6 text-red-300 hover:text-red-500 p-2 hover:bg-white/50 rounded-full transition-all"><X className="w-7 h-7" /></button>
               <div className="bg-red-600 p-6 rounded-[28px] shadow-xl shadow-red-200 mb-8 scale-110"><Database className="w-10 h-10 text-white" /></div>
               <h3 className="text-3xl font-black text-slate-800 uppercase tracking-tight mb-4 leading-tight">{dbErrorModal.message}</h3>
-              <p className="text-slate-500 font-bold text-sm leading-relaxed px-10">Para utilizar relatórios de classe, você precisa adicionar novas colunas à sua tabela no Supabase. Copie o script abaixo e execute no seu <strong>SQL Editor</strong>.</p>
+              <p className="text-slate-500 font-bold text-sm leading-relaxed px-10">Para utilizar relatórios de classe, você precisa garantir que sua coleção no PocketBase tenha todos os campos necessários. Entre em contato com o suporte ou verifique o esquema da coleção <strong>audit_history</strong>.</p>
             </div>
 
             <div className="p-8 space-y-6">
