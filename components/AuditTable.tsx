@@ -11,6 +11,7 @@ interface AuditTableProps {
   isClassReport?: boolean;
   dateLabel?: string;
   onDateClick?: () => void;
+  forceDesktopLayout?: boolean;
 }
 
 type SortField = 'corridor' | 'sku' | 'notRead' | 'partialPercentage';
@@ -69,7 +70,8 @@ const AuditTable: React.FC<AuditTableProps> = ({
   isAnalysis = false,
   isClassReport = false,
   dateLabel,
-  onDateClick
+  onDateClick,
+  forceDesktopLayout = false
 }) => {
   const [sortField, setSortField] = useState<SortField | null>(null);
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
@@ -154,9 +156,10 @@ const AuditTable: React.FC<AuditTableProps> = ({
 
   const shouldSplit = useMemo(() => {
     if (isAnalysis || isClassReport) return false;
+    if (forceDesktopLayout) return filteredAndSortedData.length > 1;
     if (forceSplit) return filteredAndSortedData.length > 1;
     return filteredAndSortedData.length > 8 && !simpleView && isLargeViewport;
-  }, [isAnalysis, isClassReport, forceSplit, filteredAndSortedData.length, simpleView, isLargeViewport]);
+  }, [isAnalysis, isClassReport, forceSplit, filteredAndSortedData.length, simpleView, isLargeViewport, forceDesktopLayout]);
 
   const { leftData, rightData } = useMemo(() => {
     if (!shouldSplit) return { leftData: filteredAndSortedData, rightData: [] };
@@ -245,7 +248,7 @@ const AuditTable: React.FC<AuditTableProps> = ({
   );
 
   return (
-    <div className={`overflow-hidden ${simpleView ? '' : 'space-y-4 md:space-y-6'}`}>
+    <div className={`overflow-hidden ${simpleView ? '' : 'space-y-4 md:space-y-6'} w-full`}>
       {!simpleView && (
         <div className="bg-white p-4 md:p-6 rounded-xl border border-slate-200 shadow-sm flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
           <div className="flex flex-col text-left">
@@ -290,7 +293,7 @@ const AuditTable: React.FC<AuditTableProps> = ({
           <p className="text-slate-400 font-black uppercase tracking-widest text-[10px]">Nenhum dado encontrado</p>
         </div>
       ) : (
-        <div className={`w-full flex flex-col ${shouldSplit ? 'lg:flex-row lg:gap-12' : 'gap-4'}`}>
+        <div className={`w-full flex ${forceDesktopLayout ? 'flex-row gap-12' : (shouldSplit ? 'lg:flex-row lg:gap-12' : 'flex-col gap-4')}`}>
           <div className="flex-1">
             {renderTableBlock(leftData)}
           </div>

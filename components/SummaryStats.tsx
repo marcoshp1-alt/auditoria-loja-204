@@ -25,6 +25,7 @@ interface SummaryStatsProps {
     generalPartial: number;
     isSyncing?: boolean;
   };
+  forceDesktopLayout?: boolean;
 }
 
 const SummaryStats: React.FC<SummaryStatsProps> = ({
@@ -37,7 +38,8 @@ const SummaryStats: React.FC<SummaryStatsProps> = ({
   onCategoryClick,
   onCollaboratorClick,
   isCollaboratorView,
-  overrideStats
+  overrideStats,
+  forceDesktopLayout = false
 }) => {
   const stats = useMemo(() => {
     if (overrideStats) return overrideStats;
@@ -76,7 +78,7 @@ const SummaryStats: React.FC<SummaryStatsProps> = ({
   const shouldShowOutdatedCard = isAnalysis && typeof stats.totalOutdated === 'number';
 
   const mainCards = (
-    <div className={`grid grid-cols-1 ${shouldShowOutdatedCard ? 'md:grid-cols-4' : 'md:grid-cols-3'} gap-6 mb-8`}>
+    <div className={`grid ${forceDesktopLayout ? (shouldShowOutdatedCard ? 'grid-cols-4 gap-12' : 'grid-cols-3 gap-12') : ('grid-cols-1 ' + (shouldShowOutdatedCard ? 'md:grid-cols-4' : 'md:grid-cols-3'))} gap-6 mb-12 w-full`}>
       {/* Total de SKU */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 flex items-center justify-between group hover:-translate-y-1 hover:shadow-md transition-all duration-300 cursor-default">
         <div>
@@ -176,7 +178,7 @@ const SummaryStats: React.FC<SummaryStatsProps> = ({
           <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Distribuição e Equipe</p>
           <div className="h-px bg-slate-200 flex-1"></div>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className={`grid ${forceDesktopLayout ? 'grid-cols-3 gap-12' : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4'} w-full`}>
           {categories.map((cat) => (
             <div
               key={cat.id}

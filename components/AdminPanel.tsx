@@ -55,7 +55,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, onProfileUpdate, p
         try {
           const profileRecord = await pb.collection('profiles').getFirstListItem(`user="${profile.id}"`, { requestKey: null });
           console.log('📊 [AdminPanel] Campos do Profile no banco:', Object.keys(profileRecord));
-          const rawVisible = profileRecord.visibleLojas || profileRecord.visible_lojas || "";
+          const rawVisible = profileRecord.visible_lojas || profileRecord.visibleLojas || "";
 
           if (rawVisible) {
             const list = rawVisible.split(',').map((l: string) => l.trim()).filter((l: string) => l !== "");
@@ -115,7 +115,8 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, onProfileUpdate, p
       const profileRecord = await pb.collection('profiles').getFirstListItem(`user="${profile.id}"`, { requestKey: null });
 
       await pb.collection('profiles').update(profileRecord.id, {
-        visibleLojas: lojasCsv
+        visibleLojas: lojasCsv,
+        visible_lojas: lojasCsv
       }, { requestKey: null });
 
       console.log('✅ Salvo com sucesso no PocketBase!');

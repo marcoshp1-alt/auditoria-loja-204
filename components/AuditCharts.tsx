@@ -5,6 +5,7 @@ import { AuditRow } from '../types';
 
 interface AuditChartsProps {
   data: AuditRow[];
+  forceDesktopLayout?: boolean;
 }
 
 /**
@@ -16,7 +17,7 @@ const formatDisplayName = (name: string): string => {
   return parts.length > 0 ? parts[0] : name;
 };
 
-const AuditCharts: React.FC<AuditChartsProps> = ({ data }) => {
+const AuditCharts: React.FC<AuditChartsProps> = ({ data, forceDesktopLayout = false }) => {
   // Pre-processamento para garantir que os nomes fiquem limpos no gráfico
   const sanitizedData = useMemo(() => {
     return data.map(item => ({
@@ -40,8 +41,8 @@ const AuditCharts: React.FC<AuditChartsProps> = ({ data }) => {
   }, [sanitizedData]);
 
   return (
-    <div className="bg-white p-5 rounded-lg shadow-md border border-slate-200 flex flex-col gap-8">
-      
+    <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200 flex flex-col gap-8 w-full">
+
       {/* Chart 1: Highest Percentages */}
       <div>
         <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wide mb-4 flex items-center gap-2 border-b pb-2 border-red-100">
@@ -57,22 +58,22 @@ const AuditCharts: React.FC<AuditChartsProps> = ({ data }) => {
             >
               <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke="#e2e8f0" />
               <XAxis type="number" unit="%" hide />
-              <YAxis 
-                dataKey="displayName" 
-                type="category" 
-                width={70} 
-                tick={{fontSize: 10, fill: '#64748b', fontWeight: 700}} 
+              <YAxis
+                dataKey="displayName"
+                type="category"
+                width={70}
+                tick={{ fontSize: 10, fill: '#64748b', fontWeight: 700 }}
                 interval={0}
               />
-              <Tooltip 
-                cursor={{fill: '#fef2f2'}}
+              <Tooltip
+                cursor={{ fill: '#fef2f2' }}
                 contentStyle={{ borderRadius: '6px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
                 formatter={(value: number) => [`${value.toFixed(2)}%`, 'Parcial']}
               />
               <Bar dataKey="partialPercentage" radius={[0, 4, 4, 0]} barSize={18} fill="#ef4444">
-                <LabelList 
-                  dataKey="partialPercentage" 
-                  position="right" 
+                <LabelList
+                  dataKey="partialPercentage"
+                  position="right"
                   formatter={(value: number) => `${value.toFixed(2)}%`}
                   fontSize={11}
                   fill="#64748b"
@@ -87,8 +88,8 @@ const AuditCharts: React.FC<AuditChartsProps> = ({ data }) => {
       {/* Chart 2: Lowest Percentages */}
       <div>
         <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wide mb-4 flex items-center gap-2 border-b pb-2 border-green-100">
-           <span className="w-2 h-2 rounded-full bg-green-500"></span>
-           Top 10 - Menores Percentuais
+          <span className="w-2 h-2 rounded-full bg-green-500"></span>
+          Top 10 - Menores Percentuais
         </h3>
         <div className="h-[300px] w-full">
           <ResponsiveContainer width="100%" height="100%">
@@ -99,22 +100,22 @@ const AuditCharts: React.FC<AuditChartsProps> = ({ data }) => {
             >
               <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke="#e2e8f0" />
               <XAxis type="number" unit="%" hide />
-              <YAxis 
-                dataKey="displayName" 
-                type="category" 
-                width={70} 
-                tick={{fontSize: 10, fill: '#64748b', fontWeight: 700}}
+              <YAxis
+                dataKey="displayName"
+                type="category"
+                width={70}
+                tick={{ fontSize: 10, fill: '#64748b', fontWeight: 700 }}
                 interval={0}
               />
-              <Tooltip 
-                cursor={{fill: '#f0fdf4'}}
+              <Tooltip
+                cursor={{ fill: '#f0fdf4' }}
                 contentStyle={{ borderRadius: '6px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
                 formatter={(value: number) => [`${value.toFixed(2)}%`, 'Parcial']}
               />
               <Bar dataKey="partialPercentage" radius={[0, 4, 4, 0]} barSize={18} fill="#22c55e">
-                <LabelList 
-                  dataKey="partialPercentage" 
-                  position="right" 
+                <LabelList
+                  dataKey="partialPercentage"
+                  position="right"
                   formatter={(value: number) => `${value.toFixed(2)}%`}
                   fontSize={11}
                   fill="#64748b"

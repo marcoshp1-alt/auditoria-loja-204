@@ -73,6 +73,7 @@ const App: React.FC = () => {
   const [manualSku, setManualSku] = useState<string>('');
 
   const reportRef = useRef<HTMLDivElement>(null);
+  const captureRef = useRef<HTMLDivElement>(null);
 
   const showToast = useCallback((message: string) => setToast({ visible: true, message }), []);
 
@@ -116,11 +117,11 @@ const App: React.FC = () => {
         }
 
         // 2. Carrega lojas visíveis do novo campo, com fallback para loja se necessário
-        const rawVisible = profileData?.visibleLojas || profileData?.visible_lojas || "";
+        const rawVisible = profileData?.visible_lojas || profileData?.visibleLojas || "";
         console.log('📊 Campos do Profile:', Object.keys(profileData || {}));
-        console.log('📦 Conteúdo visibleLojas:', rawVisible);
+        console.log('📦 Conteúdo visibleLojas bruto:', rawVisible);
 
-        const visibleList = rawVisible.split(',')
+        const visibleList = String(rawVisible).split(',')
           .map((l: string) => l.trim())
           .filter((l: string) => l !== '' && l.length < 10);
 
@@ -451,14 +452,21 @@ const App: React.FC = () => {
   };
 
   const handleShareReport = async () => {
-    if (!reportRef.current) return;
+    if (!captureRef.current) return;
     try {
       setIsSyncing(true);
-      const canvas = await html2canvas(reportRef.current, {
-        scale: 3, // Alta qualidade
+      const canvas = await html2canvas(captureRef.current, {
+        scale: 3,
         backgroundColor: '#f1f5f9',
         logging: false,
-        useCORS: true
+        useCORS: true,
+        width: 1452, // largura calculada: 3*420px + 2*48px (gap) + 2*48px (padding)
+        onclone: (clonedDoc) => {
+          const element = clonedDoc.getElementById('capture-container');
+          if (element) {
+            element.style.display = 'block';
+          }
+        }
       });
 
       // Converter para blob usando Promise para manter o contexto do gesto do usuário
@@ -562,9 +570,19 @@ const App: React.FC = () => {
   };
 
   const handleExportImage = async () => {
-    if (!reportRef.current) return;
+    if (!captureRef.current) return;
     try {
-      const canvas = await html2canvas(reportRef.current, { scale: 2, backgroundColor: '#f1f5f9' });
+      const canvas = await html2canvas(captureRef.current, {
+        scale: 3,
+        backgroundColor: '#f1f5f9',
+        width: 1452,
+        onclone: (clonedDoc) => {
+          const element = clonedDoc.getElementById('capture-container');
+          if (element) {
+            element.style.display = 'block';
+          }
+        }
+      });
       const link = document.createElement("a");
       link.href = canvas.toDataURL("image/png");
       link.download = `Relatorio_${reportType}_Loja_${activeLoja}.png`;
@@ -576,9 +594,19 @@ const App: React.FC = () => {
   };
 
   const handleCopyReport = async () => {
-    if (!reportRef.current) return;
+    if (!captureRef.current) return;
     try {
-      const canvas = await html2canvas(reportRef.current, { scale: 2, backgroundColor: '#f1f5f9' });
+      const canvas = await html2canvas(captureRef.current, {
+        scale: 3,
+        backgroundColor: '#f1f5f9',
+        width: 1452,
+        onclone: (clonedDoc) => {
+          const element = clonedDoc.getElementById('capture-container');
+          if (element) {
+            element.style.display = 'block';
+          }
+        }
+      });
       canvas.toBlob(async (blob) => {
         if (blob && navigator.clipboard) {
           await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
@@ -1036,6 +1064,60 @@ const App: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Container Oculto para Captura de Imagem (Força Layout Desktop) */}
+      <div style={{ position: 'absolute', top: '-9999px', left: '-9999px', width: '1452px' }}>
+        <div ref={captureRef} id="capture-container" className="bg-slate-100 p-12 w-[1452px]">
+          <div className="flex flex-col gap-1 mb-10 text-left px-4">
+            <h1 className="text-5xl font-black text-slate-900 tracking-tight uppercase leading-tight">
+              <span>{reportInfo.title}</span>
+              <span className="ml-4 text-blue-600 font-black">{reportInfo.store}</span>
+            </h1>
+          </div>
+
+          <div className="px-4">
+            <SummaryStats
+              data={data}
+              isAnalysis={reportType === 'analysis'}
+              isClassReport={reportType === 'class'}
+              categoryStats={classCategoryStats}
+              collaboratorStats={classCollaboratorStats || {}}
+              selectedCategory={null}
+              isCollaboratorView={false}
+              overrideStats={currentStats}
+              forceDesktopLayout={true}
+            />
+          </div>
+
+          <div className="flex gap-12 items-start px-4">
+            <div className={`${reportType === 'class' ? 'w-full' : 'w-[888px]'} flex-shrink-0`}>
+              <AuditTable
+                data={data}
+                isAnalysis={reportType === 'analysis'}
+                isClassReport={reportType === 'class'}
+                dateLabel={getFormattedDateLabel()}
+                forceDesktopLayout={true}
+              />
+            </div>
+            {reportType !== 'class' && data && data.length > 0 && (
+              <div className="w-[420px] flex-shrink-0">
+                <AuditCharts data={data} forceDesktopLayout={true} />
+              </div>
+            )}
+          </div>
+
+          <div className="mt-12 p-8 bg-white/80 backdrop-blur-sm rounded-3xl border border-slate-200 shadow-sm mx-4 flex justify-between items-center text-slate-400 font-black uppercase tracking-[0.25em] text-[11px]">
+            <div className="flex items-center gap-3">
+              <div className="w-2 h-2 rounded-full bg-blue-500"></div>
+              <span>PAINEL DE MONITORAMENTO TÉCNICO</span>
+            </div>
+            <span>RELATÓRIO OFICIAL • {new Date().toLocaleString('pt-BR')}</span>
+            <div className="flex items-center gap-3 text-slate-500">
+              <span className="bg-slate-100 px-4 py-1.5 rounded-full">{history.length} REGISTROS</span>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 };
