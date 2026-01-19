@@ -13,7 +13,7 @@ export const fetchHistory = async (profile: UserProfile): Promise<HistoryItem[]>
 
     console.log('🔍 Buscando histórico com filtro:', filter || 'NENHUM (ADMIN - VER TUDO)');
 
-    const records = await pb.collection('audit_history').getList(1, 100, {
+    const records = await pb.collection('audit_history').getList(1, 500, {
       sort: '-created',
       filter: filter,
       requestKey: null // Desativa cancelamento automático para garantir persistência
@@ -24,7 +24,7 @@ export const fetchHistory = async (profile: UserProfile): Promise<HistoryItem[]>
       timestamp: new Date(row.created).getTime(),
       fileName: row.fileName,
       reportType: row.reportType,
-      data: [], // Vazio por padrão no fetch leve
+      data: [],
       classDetails: [],
       categoryStats: null,
       collaboratorStats: null,
@@ -60,7 +60,25 @@ export const fetchHistoryItemDetails = async (id: string): Promise<any> => {
 const REPORT_LIMITS: Record<string, number> = {
   'audit': 5,
   'analysis': 1,
-  'class': 1
+  'class': 1,
+  'final_rupture': 1
+};
+
+// Função auxiliar para obter o intervalo da semana (Domingo a Sábado)
+const getWeekRange = (date: Date) => {
+  const d = new Date(date);
+  const day = d.getDay(); // 0 (Dom) a 6 (Sab)
+
+  const diffToSunday = day;
+  const sunday = new Date(d);
+  sunday.setDate(d.getDate() - diffToSunday);
+  sunday.setHours(0, 0, 0, 0);
+
+  const saturday = new Date(sunday);
+  saturday.setDate(sunday.getDate() + 6);
+  saturday.setHours(23, 59, 59, 999);
+
+  return { sunday, saturday };
 };
 
 export const addHistoryItem = async (item: HistoryItem): Promise<void> => {
@@ -69,30 +87,49 @@ export const addHistoryItem = async (item: HistoryItem): Promise<void> => {
   const limit = REPORT_LIMITS[type] || 5;
 
   try {
-    // 1. Buscar registros existentes do mesmo tipo, loja e DATA, ordenados por data (mais antigos primeiro)
-    // Agora o limite é por DATA (customDate), permitindo histórico de dias diferentes
-    let filter = `loja = "${loja}" && reportType = "${type}"`;
-    if (item.customDate) {
-      filter += ` && customDate = "${item.customDate}"`;
-    } else {
-      filter += ` && customDate = null`;
-    }
+    if (type === 'rupture') {
+      // Regra: Apenas uma ruptura por semana (Dom a Sab)
+      const itemDate = item.customDate ? new Date(item.customDate + 'T12:00:00') : new Date(item.timestamp);
+      const { sunday, saturday } = getWeekRange(itemDate);
 
-    const existing = await pb.collection('audit_history').getFullList({
-      filter: filter,
-      sort: 'created',
-      fields: 'id', // Só precisamos do ID para deletar
-      requestKey: null
-    });
+      const isoSunday = sunday.toISOString().replace('T', ' ').substring(0, 19);
+      const isoSaturday = saturday.toISOString().replace('T', ' ').substring(0, 19);
 
-    // 2. Se atingiu ou passou o limite PARA ESSE DIA, apagar o(s) mais antigo(s)
-    if (existing.length >= limit) {
-      const toDeleteCount = (existing.length - limit) + 1;
-      const toDelete = existing.slice(0, toDeleteCount);
+      // Busca registros de ruptura da mesma loja na mesma semana
+      // Nota: customDate é string YYYY-MM-DD. Podemos filtrar por ele ou por created.
+      // Para ser mais preciso com o que o usuário vê (semana do relatório):
+      const existingInWeek = await pb.collection('audit_history').getFullList({
+        filter: `loja = "${loja}" && reportType = "rupture" && created >= "${isoSunday}" && created <= "${isoSaturday}"`,
+        requestKey: null
+      });
 
-      for (const record of toDelete) {
-        console.log(`🗑️ Removendo histórico antigo (${type}) da loja ${loja} no dia ${item.customDate || 'sem data'}: ${record.id}`);
+      for (const record of existingInWeek) {
+        console.log(`🗑️ Removendo ruptura duplicada na semana: ${record.id}`);
         await pb.collection('audit_history').delete(record.id);
+      }
+    } else {
+      // Limpeza padrão por dia/limite para outros tipos
+      let filter = `loja = "${loja}" && reportType = "${type}"`;
+      if (item.customDate) {
+        filter += ` && customDate = "${item.customDate}"`;
+      } else {
+        filter += ` && customDate = null`;
+      }
+
+      const existing = await pb.collection('audit_history').getFullList({
+        filter: filter,
+        sort: 'created',
+        fields: 'id',
+        requestKey: null
+      });
+
+      if (existing.length >= limit) {
+        const toDeleteCount = (existing.length - limit) + 1;
+        const toDelete = existing.slice(0, toDeleteCount);
+
+        for (const record of toDelete) {
+          await pb.collection('audit_history').delete(record.id);
+        }
       }
     }
 

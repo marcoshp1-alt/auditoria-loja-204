@@ -43,7 +43,7 @@ export interface HistoryItem {
   id: string;
   timestamp: number;
   fileName: string;
-  reportType: 'audit' | 'analysis' | 'class';
+  reportType: 'audit' | 'analysis' | 'class' | 'final_rupture' | 'rupture';
   data: AuditRow[];
   classDetails?: ClassDetailRow[];
   categoryStats?: {

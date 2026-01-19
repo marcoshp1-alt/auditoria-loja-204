@@ -17,10 +17,10 @@ import { AuditRow, ClassDetailRow, HistoryItem, UserProfile } from './types';
 import { parseExcelFile, parseAnalysisFile, parseProductClassFile } from './services/excelService';
 import { fetchHistory, addHistoryItem, deleteHistoryItemById, deleteAllHistory, fetchHistoryItemDetails, updateHistoryItemDate } from './services/historyService';
 import { pb } from './services/pocketbase';
-import { LayoutDashboard, RefreshCcw, Download, Copy, Package, EyeOff, Activity, BarChart2, FileSpreadsheet, Menu, CloudOff, Cloud, ShieldAlert, Loader2, Calendar, LayoutGrid, FileSearch, Hash, Check, Database, Terminal, Copy as CopyIcon, X, Share2 } from 'lucide-react';
+import { LayoutDashboard, RefreshCcw, Download, Copy, Package, EyeOff, Activity, BarChart2, FileSpreadsheet, Menu, CloudOff, Cloud, ShieldAlert, Loader2, Calendar, LayoutGrid, FileSearch, Hash, Check, Database, Terminal, Copy as CopyIcon, X, Share2, FilePlus } from 'lucide-react';
 import html2canvas from 'html2canvas';
 
-type ReportType = 'audit' | 'analysis' | 'class';
+type ReportType = 'audit' | 'analysis' | 'class' | 'rupture' | 'final_rupture';
 type ViewType = 'dashboard' | 'admin' | 'weekly';
 
 const App: React.FC = () => {
@@ -213,7 +213,12 @@ const App: React.FC = () => {
       ? newData.reduce((acc, curr) => acc + (curr.outdated || 0), 0)
       : undefined;
 
-    const generalPartial = totalSku > 0 ? (totalNotRead / totalSku) * 100 : 0;
+    let generalPartial = totalSku > 0 ? (totalNotRead / totalSku) * 100 : 0;
+
+    // Arredondar para cima se for Ruptura Final
+    if (type === 'rupture') {
+      generalPartial = Math.ceil(generalPartial);
+    }
 
     setActiveLoja(profile.loja);
 
@@ -451,6 +456,22 @@ const App: React.FC = () => {
     } catch (error) { console.error(error); } finally { setLoading(false); }
   };
 
+  const handleFinalRuptureFileSelect = async (file: File, date: string | null) => {
+    setLoading(true); setReportType('rupture'); setCustomDate(date);
+    try {
+      const parsedData = await parseAnalysisFile(file);
+      startTransition(() => {
+        setData(parsedData);
+        setClassDetails([]); setClassCategoryStats(null); setClassCollaboratorStats(null);
+      });
+      await addToHistory(parsedData, 'rupture', file, date);
+      showToast("Ruptura Final Importada!");
+    } catch (error) {
+      console.error(error);
+      showToast("Erro ao importar ruptura final.");
+    } finally { setLoading(false); }
+  };
+
   const handleShareReport = async () => {
     if (!captureRef.current) return;
     try {
@@ -547,6 +568,8 @@ const App: React.FC = () => {
       else title = `Auditoria Parcial`;
     } else if (reportType === 'analysis') {
       title = `Resultado Auditoria`;
+    } else if (reportType === 'rupture') {
+      title = `Ruptura Final`;
     } else {
       title = `Não Lidos por Classe`;
     }
@@ -637,7 +660,8 @@ const App: React.FC = () => {
       totalSku = 0;
     }
 
-    const generalPartial = totalSku > 0 ? (totalNotRead / totalSku) * 100 : 0;
+    const generalPartialRaw = totalSku > 0 ? (totalNotRead / totalSku) * 100 : 0;
+    const generalPartial = reportType === 'rupture' ? Math.ceil(generalPartialRaw) : generalPartialRaw;
 
     return {
       totalSku,
@@ -647,6 +671,57 @@ const App: React.FC = () => {
       isSyncing: loading || reportLoading
     };
   }, [data, history, activeReportId, reportType, loading, reportLoading, skuModal.isOpen]);
+
+  const getEtiquetaFinalStats = useMemo(() => {
+    if (!profile) return null;
+
+    // Função auxiliar para intervalo semanal (Dom-Sab)
+    const getWeekBoundaries = (dStr: string | null) => {
+      const d = dStr ? new Date(dStr + 'T12:00:00') : new Date();
+      const sunday = new Date(d);
+      sunday.setDate(d.getDate() - d.getDay());
+      sunday.setHours(0, 0, 0, 0);
+      const saturday = new Date(sunday);
+      saturday.setDate(sunday.getDate() + 6);
+      saturday.setHours(23, 59, 59, 999);
+      return { sunday, saturday };
+    };
+
+    const period = getWeekBoundaries(customDate);
+
+    // Filtra histórico por loja, tipo e semana selecionada
+    const storeHistory = history.filter(h => {
+      if (h.loja !== profile.loja) return false;
+      if (h.reportType !== 'audit' && h.reportType !== 'analysis') return false;
+
+      const itemDate = h.customDate ? new Date(h.customDate + 'T12:00:00') : new Date(h.timestamp);
+      return itemDate >= period.sunday && itemDate <= period.saturday;
+    });
+
+    // Encontrar último de Segunda (1) e Último de Quinta (4) na semana filtrada
+    let mondayItem: HistoryItem | null = null;
+    let thursdayItem: HistoryItem | null = null;
+
+    storeHistory.forEach(item => {
+      const date = item.customDate ? new Date(item.customDate + 'T12:00:00') : new Date(item.timestamp);
+      const day = date.getDay();
+      if (day === 1 && (!mondayItem || item.timestamp > mondayItem.timestamp)) mondayItem = item;
+      if (day === 4 && (!thursdayItem || item.timestamp > thursdayItem.timestamp)) thursdayItem = item;
+    });
+
+    if (mondayItem && thursdayItem) {
+      const m = mondayItem as HistoryItem;
+      const t = thursdayItem as HistoryItem;
+      const avg = (m.stats.generalPartial + t.stats.generalPartial) / 2;
+      return {
+        value: avg,
+        monday: m.stats.generalPartial,
+        thursday: t.stats.generalPartial
+      };
+    }
+
+    return null;
+  }, [history, profile, customDate]);
 
   const filteredDetailedRows = useMemo(() => {
     if (!selectedCategory) return [];
@@ -765,6 +840,8 @@ const App: React.FC = () => {
         onOpenAdmin={() => setCurrentView('admin')} onOpenDashboard={() => setCurrentView('dashboard')} onOpenWeekly={() => setCurrentView('weekly')}
         onOpenPasswordChange={() => setIsPasswordModalOpen(true)}
         activeView={currentView}
+        selectedDate={customDate}
+        onDateChange={setCustomDate}
       />
 
       <div className={`transition-all duration-300 ease-in-out ${isSidebarOpen ? 'lg:ml-72' : 'lg:ml-0'}`}>
@@ -791,8 +868,8 @@ const App: React.FC = () => {
                   </div>
                 )}
               </div>
-              <button onClick={handleExportImage} className="hidden md:flex p-2 text-purple-600 bg-purple-50 rounded-lg hover:bg-purple-100 transition-colors"><Download className="w-5 h-5" /></button>
-              {canEdit && <button onClick={triggerHeaderFileUpload} className="hidden md:flex p-2 text-emerald-600 bg-emerald-50 rounded-lg hover:bg-emerald-100 transition-colors"><RefreshCcw className="w-5 h-5" /></button>}
+              <button onClick={handleExportImage} className="hidden md:flex p-2 text-purple-600 bg-purple-50 rounded-lg hover:bg-purple-100 transition-colors" title="Baixar Imagem"><Download className="w-5 h-5" /></button>
+              {canEdit && <button onClick={triggerHeaderFileUpload} className="hidden md:flex p-2 text-emerald-600 bg-emerald-50 rounded-lg hover:bg-emerald-100 transition-colors" title="Nova Importação"><FilePlus className="w-5 h-5" /></button>}
 
               {/* Mobile Only Share Button */}
               <button
@@ -817,9 +894,15 @@ const App: React.FC = () => {
           {currentView === 'admin' ? <AdminPanel profile={profile} onShowToast={showToast} onProfileUpdate={(newProfile) => {
             setProfile(newProfile);
             // O useEffect que observa 'profile' irá disparar o loadHistory automaticamente
-          }} /> : currentView === 'weekly' ? <WeeklySummary history={history} userProfile={profile} onSelectAudit={handleHistorySelect} /> : (
+          }} /> : currentView === 'weekly' ? <WeeklySummary history={history} userProfile={profile} selectedDate={customDate} onSelectAudit={handleHistorySelect} onDateChange={setCustomDate} onImportFinalRupture={handleFinalRuptureFileSelect} /> : (
             !hasData ? (
-              canEdit ? <div className="mt-10 grid grid-cols-1 md:grid-cols-3 gap-6 max-w-7xl mx-auto"><FileUpload onFileSelect={handleAuditFileSelect} isLoading={loading} title="Importar Auditoria" subtitle="Planilha Parcial" variant="blue" /><FileUpload onFileSelect={handleAnalysisFileSelect} isLoading={loading} title="Importar Análise" subtitle="Planilha Detalhada" variant="purple" /><FileUpload onFileSelect={handleClassFileSelect} isLoading={loading} title="Classe de Produto" subtitle="Itens por Classe" variant="orange" /></div> :
+              canEdit ? (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <FileUpload onFileSelect={handleAuditFileSelect} isLoading={loading} title="Importar Auditoria" subtitle="Planilha Parcial" variant="blue" />
+                  <FileUpload onFileSelect={handleAnalysisFileSelect} isLoading={loading} title="Importar Análise" subtitle="Planilha Detalhada" variant="purple" />
+                  <FileUpload onFileSelect={handleClassFileSelect} isLoading={loading} title="Classe de Produto" subtitle="Itens por Classe" variant="orange" />
+                </div>
+              ) :
                 <div className="mt-20 flex flex-col items-center text-center"><div className="bg-white p-12 rounded-[50px] shadow-2xl max-w-lg"><FileSearch className="w-12 h-12 text-slate-300 mx-auto mb-8" /><h3 className="text-2xl font-black mb-4 uppercase">Visualização de Dados</h3><p className="text-slate-500">Selecione um relatório no menu lateral para visualizar os dados salvos.</p></div></div>
             ) : (
               <div ref={reportRef} key={activeReportId || 'new'} className="animate-in fade-in slide-in-from-top-4 duration-500">
@@ -832,7 +915,7 @@ const App: React.FC = () => {
 
                 <SummaryStats
                   data={data}
-                  isAnalysis={reportType === 'analysis'}
+                  isAnalysis={reportType === 'analysis' || reportType === 'rupture'}
                   isClassReport={reportType === 'class'}
                   categoryStats={classCategoryStats}
                   collaboratorStats={classCollaboratorStats || {}}
@@ -871,7 +954,7 @@ const App: React.FC = () => {
                       <div className={`${reportType === 'class' ? 'xl:col-span-12' : 'xl:col-span-8'}`}>
                         <AuditTable
                           data={data}
-                          isAnalysis={reportType === 'analysis'}
+                          isAnalysis={reportType === 'analysis' || reportType === 'rupture'}
                           isClassReport={reportType === 'class'}
                           dateLabel={getFormattedDateLabel()}
                           onDateClick={canEdit ? () => {

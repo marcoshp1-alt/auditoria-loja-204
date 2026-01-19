@@ -21,10 +21,12 @@ interface HistorySidebarProps {
   onOpenPasswordChange: () => void;
   activeView: 'dashboard' | 'admin' | 'weekly';
   activeReportId?: string;
+  selectedDate: string | null;
+  onDateChange: (date: string | null) => void;
 }
 
 const HistorySidebar: React.FC<HistorySidebarProps> = ({
-  history, onSelect, onClearAll, onDelete, isOpen, toggleSidebar, onSignOut, userEmail, isAdmin, role, loja, onOpenAdmin, onOpenDashboard, onOpenWeekly, onOpenPasswordChange, activeView, activeReportId
+  history, onSelect, onClearAll, onDelete, isOpen, toggleSidebar, onSignOut, userEmail, isAdmin, role, loja, onOpenAdmin, onOpenDashboard, onOpenWeekly, onOpenPasswordChange, activeView, activeReportId, selectedDate, onDateChange
 }) => {
   // Função para obter data local YYYY-MM-DD corretamente
   const getTodayLocal = () => {
@@ -35,21 +37,22 @@ const HistorySidebar: React.FC<HistorySidebarProps> = ({
     return `${year}-${month}-${day}`;
   };
 
-  const [filterDate, setFilterDate] = useState<string>(getTodayLocal());
+  // O filtro de data agora é controlado externamente pelo prop selectedDate
+  const filterDate = selectedDate || getTodayLocal();
   const dateInputRef = useRef<HTMLInputElement>(null);
 
-  // Sincronizar filtro lateral com o relatório ativo (caso venha do resumo semanal, por exemplo)
+  // Sincronizar filtro lateral com o relatório ativo
   React.useEffect(() => {
     if (activeReportId && history.length > 0) {
       const activeItem = history.find(h => h.id === activeReportId);
       if (activeItem) {
         const itemDate = activeItem.customDate || new Date(activeItem.timestamp).toLocaleDateString('en-CA');
-        if (itemDate !== filterDate) {
-          setFilterDate(itemDate);
+        if (itemDate !== selectedDate) {
+          onDateChange(itemDate);
         }
       }
     }
-  }, [activeReportId, history]);
+  }, [activeReportId, history, selectedDate, onDateChange]);
 
   // Helper para formatar porcentagem com truncamento (sem arredondar)
   const formatTruncatedPercentage = (value: number) => {
@@ -88,6 +91,7 @@ const HistorySidebar: React.FC<HistorySidebarProps> = ({
 
     if (item.reportType === 'class') return "Classe";
     if (item.reportType === 'analysis') return "Análise";
+    if (item.reportType === 'rupture' || item.reportType === 'final_rupture') return "Análise";
     return "Auditoria";
   };
 
@@ -159,8 +163,8 @@ const HistorySidebar: React.FC<HistorySidebarProps> = ({
           <div
             onClick={() => dateInputRef.current?.showPicker()}
             className={`group relative flex items-center justify-between p-3 rounded-2xl border-2 transition-all cursor-pointer ${filterDate
-                ? 'border-blue-500 bg-blue-50/50'
-                : 'border-slate-100 bg-slate-50 hover:border-slate-300'
+              ? 'border-blue-500 bg-blue-50/50'
+              : 'border-slate-100 bg-slate-50 hover:border-slate-300'
               }`}
           >
             <div className="flex items-center gap-3">
@@ -184,8 +188,8 @@ const HistorySidebar: React.FC<HistorySidebarProps> = ({
             <input
               type="date"
               ref={dateInputRef}
-              value={filterDate || ''}
-              onChange={e => setFilterDate(e.target.value)}
+              value={filterDate}
+              onChange={e => onDateChange(e.target.value)}
               className="absolute inset-0 opacity-0 pointer-events-none"
             />
           </div>
@@ -223,8 +227,8 @@ const HistorySidebar: React.FC<HistorySidebarProps> = ({
                   <div
                     key={item.id}
                     className={`group border rounded-2xl p-4 transition-all cursor-pointer relative overflow-hidden ${isActive
-                        ? 'bg-blue-50/40 border-blue-500 shadow-lg shadow-blue-500/10'
-                        : 'bg-white border-slate-200 hover:border-blue-500 hover:shadow-xl hover:shadow-blue-500/10'
+                      ? 'bg-blue-50/40 border-blue-500 shadow-lg shadow-blue-500/10'
+                      : 'bg-white border-slate-200 hover:border-blue-500 hover:shadow-xl hover:shadow-blue-500/10'
                       }`}
                     onClick={() => onSelect(item)}
                   >
@@ -232,9 +236,9 @@ const HistorySidebar: React.FC<HistorySidebarProps> = ({
 
                     <div className="flex justify-between items-start mb-3">
                       <div className="flex items-center gap-2">
-                        <span className={`text-[8px] font-black px-2 py-1 rounded-lg uppercase tracking-wider ${item.reportType === 'analysis' ? 'bg-purple-600 text-white' :
-                            item.reportType === 'class' ? 'bg-orange-500 text-white' :
-                              'bg-blue-600 text-white'
+                        <span className={`text-[8px] font-black px-2 py-1 rounded-lg uppercase tracking-wider ${item.reportType === 'analysis' || item.reportType === 'rupture' || item.reportType === 'final_rupture' ? 'bg-purple-600 text-white' :
+                          item.reportType === 'class' ? 'bg-orange-500 text-white' :
+                            'bg-blue-600 text-white'
                           }`}>
                           {getAuditLabel(item)}
                         </span>
