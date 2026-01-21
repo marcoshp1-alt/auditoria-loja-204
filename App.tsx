@@ -78,6 +78,28 @@ const App: React.FC = () => {
   const showToast = useCallback((message: string) => setToast({ visible: true, message }), []);
 
   // 2. HELPER FUNCTIONS
+  // Handler específico para mudança de data no sidebar
+  // Quando o usuário muda a data manualmente, precisamos limpar o relatório ativo
+  // MAS apenas se a nova data for DIFERENTE da data do relatório ativo.
+  // Se for igual, é apenas uma sincronização visual e devemos manter o relatório selecionado.
+  const handleSidebarDateChange = (date: string | null) => {
+    setCustomDate(date);
+
+    if (activeReportId && date) {
+      const activeItem = history.find(h => h.id === activeReportId);
+      if (activeItem) {
+        const itemDate = activeItem.customDate || new Date(activeItem.timestamp).toLocaleDateString('en-CA');
+        // Se a data escolhida for diferente da do relatório, significa que o usuário quer sair
+        if (itemDate !== date) {
+          setActiveReportId('');
+        }
+      }
+    } else if (activeReportId && !date) {
+      // Se limpar a data, limpa o relatório também
+      setActiveReportId('');
+    }
+  };
+
   const fetchProfile = useCallback(async (user: any) => {
     try {
       // No PocketBase, o perfil já vem no authStore ou buscamos na coleção 'profiles'
@@ -244,7 +266,12 @@ const App: React.FC = () => {
 
       const savedItem = updatedHistory[0];
       if (savedItem) {
-        setActiveReportId(savedItem.id);
+        // Apenas assume como "ativo" se estivermos no dashboard.
+        // Se estivermos no Resumo Semanal (ex: importando ruptura), 
+        // não queremos travar a navegação lateral selecionando um item específico.
+        if (currentView === 'dashboard') {
+          setActiveReportId(savedItem.id);
+        }
       }
     } catch (e: any) {
       console.error("Erro ao salvar no PocketBase:", e);
@@ -405,6 +432,9 @@ const App: React.FC = () => {
       startTransition(() => {
         setData(parsedData);
         setClassDetails([]); setClassCategoryStats(null); setClassCollaboratorStats(null);
+        if (currentView === 'weekly') {
+          setActiveReportId(''); // Garantir que não trave a data no resumo semanal
+        }
       });
       await addToHistory(parsedData, 'audit', file, date);
       showToast("Arquivo importado!");
@@ -457,14 +487,17 @@ const App: React.FC = () => {
   };
 
   const handleFinalRuptureFileSelect = async (file: File, date: string | null) => {
-    setLoading(true); setReportType('rupture'); setCustomDate(date);
+    setLoading(true); setReportType('final_rupture'); setCustomDate(date);
     try {
       const parsedData = await parseAnalysisFile(file);
       startTransition(() => {
         setData(parsedData);
         setClassDetails([]); setClassCategoryStats(null); setClassCollaboratorStats(null);
+        if (currentView === 'weekly') {
+          setActiveReportId(''); // Garantir que não trave a data no resumo semanal
+        }
       });
-      await addToHistory(parsedData, 'rupture', file, date);
+      await addToHistory(parsedData, 'final_rupture', file, date);
       showToast("Ruptura Final Importada!");
     } catch (error) {
       console.error(error);
@@ -578,19 +611,35 @@ const App: React.FC = () => {
   };
 
   const getFormattedDateLabel = () => {
+    // 1. Se tem um relatório ativo (histórico), prioriza a data DELE
     const histItem = history.find(h => h.id === activeReportId);
-    if (!activeReportId && !customDate) return "";
+    if (histItem) {
+      // Se o item tem customDate (data "fria" editada), exibe sem hora
+      if (histItem.customDate) {
+        const [y, m, d] = histItem.customDate.split('-');
+        return `${d}/${m}/${y}`;
+      }
+      // Se não tem customDate, usa o timestamp original (data exata com hora)
+      return new Date(histItem.timestamp).toLocaleString('pt-BR', {
+        day: '2-digit', month: '2-digit', year: 'numeric',
+        hour: '2-digit', minute: '2-digit'
+      }).replace(',', ' às');
+    }
+
+    // 2. Se não tem relatório ativo, mas tem customDate (filtro ou nova importação)
     if (customDate) {
       const parts = customDate.split('-');
       if (parts.length === 3) {
         const [y, m, d] = parts;
-        return `${d}/${m}/${y}`;
+        return `${d}/${m}/${y}`; // Retorna apenas data
       }
     }
-    return new Date(histItem?.timestamp || Date.now()).toLocaleString('pt-BR', {
-      day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'
-    }).replace(',', ' às');
+
+    // 3. Fallback para novo relatório ainda não salvo (apenas data de hoje)
+    return new Date().toLocaleDateString('pt-BR');
   };
+
+
 
   const handleExportImage = async () => {
     if (!captureRef.current) return;
@@ -837,11 +886,14 @@ const App: React.FC = () => {
         isOpen={isSidebarOpen} toggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
         onSignOut={handleSignOut} userEmail={profile?.username}
         isAdmin={profile?.role === 'admin'} role={profile?.role} loja={profile?.loja}
-        onOpenAdmin={() => setCurrentView('admin')} onOpenDashboard={() => setCurrentView('dashboard')} onOpenWeekly={() => setCurrentView('weekly')}
+        onOpenAdmin={() => setCurrentView('admin')} onOpenDashboard={() => setCurrentView('dashboard')} onOpenWeekly={() => {
+          setCurrentView('weekly');
+          setActiveReportId(''); // Limpar seleção para evitar conflito de data
+        }}
         onOpenPasswordChange={() => setIsPasswordModalOpen(true)}
         activeView={currentView}
         selectedDate={customDate}
-        onDateChange={setCustomDate}
+        onDateChange={handleSidebarDateChange}
       />
 
       <div className={`transition-all duration-300 ease-in-out ${isSidebarOpen ? 'lg:ml-72' : 'lg:ml-0'}`}>

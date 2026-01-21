@@ -261,24 +261,7 @@ const WeeklySummary: React.FC<WeeklySummaryProps> = ({ history, userProfile, sel
               )}
             </div>
 
-            <div className="flex gap-2 isolate">
-              <div className="relative flex-1">
-                <input
-                  type="date"
-                  value={selectedDate || new Date().toISOString().split('T')[0]}
-                  onChange={(e) => onDateChange?.(e.target.value)}
-                  className="w-full pl-10 pr-4 py-3 bg-slate-50 border-2 border-slate-100 rounded-2xl font-black text-[9px] uppercase tracking-widest text-slate-700 focus:bg-white focus:border-blue-500 outline-none transition-all cursor-pointer shadow-sm"
-                />
-                <Calendar className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-blue-500 pointer-events-none" />
-              </div>
-              <button
-                onClick={() => onDateChange?.(new Date().toISOString().split('T')[0])}
-                title="Ir para Hoje"
-                className="p-3 bg-blue-50 text-blue-600 rounded-2xl border-2 border-blue-100 hover:bg-blue-100 transition-all active:scale-95 shadow-sm"
-              >
-                <RefreshCcw className="w-4 h-4" />
-              </button>
-            </div>
+
 
             <button
               onClick={handleExport}
@@ -422,7 +405,23 @@ const WeeklySummary: React.FC<WeeklySummaryProps> = ({ history, userProfile, sel
                             onChange={(e) => {
                               const file = e.target.files?.[0];
                               if (file && onImportFinalRupture) {
-                                onImportFinalRupture(file, null);
+                                let targetDate = '';
+
+                                // 1. Tentar pegar a data real da auditoria de 'Quarta - Ruptura'
+                                if (summary.wednesday) {
+                                  const refDate = summary.wednesday.customDate
+                                    ? new Date(summary.wednesday.customDate + 'T12:00:00')
+                                    : new Date(summary.wednesday.timestamp);
+                                  targetDate = refDate.toISOString().split('T')[0];
+                                } else {
+                                  // 2. Fallback: Calcular a data de quarta-feira da semana selecionada
+                                  const ruptureDate = new Date(weekRange.sunday);
+                                  ruptureDate.setDate(weekRange.sunday.getDate() + 3);
+                                  targetDate = ruptureDate.toISOString().split('T')[0];
+                                }
+
+                                onImportFinalRupture(file, targetDate);
+                                e.target.value = ''; // Reset para permitir reimportar o mesmo arquivo se necessário
                               }
                             }}
                           />

@@ -87,7 +87,7 @@ export const addHistoryItem = async (item: HistoryItem): Promise<void> => {
   const limit = REPORT_LIMITS[type] || 5;
 
   try {
-    if (type === 'rupture') {
+    if (type === 'rupture' || type === 'final_rupture') {
       // Regra: Apenas uma ruptura por semana (Dom a Sab)
       const itemDate = item.customDate ? new Date(item.customDate + 'T12:00:00') : new Date(item.timestamp);
       const { sunday, saturday } = getWeekRange(itemDate);

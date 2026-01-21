@@ -41,9 +41,9 @@ const HistorySidebar: React.FC<HistorySidebarProps> = ({
   const filterDate = selectedDate || getTodayLocal();
   const dateInputRef = useRef<HTMLInputElement>(null);
 
-  // Sincronizar filtro lateral com o relatório ativo
+  // Sincronizar filtro lateral com o relatório ativo (apenas no dashboard)
   React.useEffect(() => {
-    if (activeReportId && history.length > 0) {
+    if (activeView === 'dashboard' && activeReportId && history.length > 0) {
       const activeItem = history.find(h => h.id === activeReportId);
       if (activeItem) {
         const itemDate = activeItem.customDate || new Date(activeItem.timestamp).toLocaleDateString('en-CA');
@@ -52,7 +52,7 @@ const HistorySidebar: React.FC<HistorySidebarProps> = ({
         }
       }
     }
-  }, [activeReportId, history, selectedDate, onDateChange]);
+  }, [activeReportId, history, selectedDate, onDateChange, activeView]);
 
   // Helper para formatar porcentagem com truncamento (sem arredondar)
   const formatTruncatedPercentage = (value: number) => {
