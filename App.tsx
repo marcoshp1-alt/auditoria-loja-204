@@ -903,27 +903,42 @@ const App: React.FC = () => {
             <div className={`p-2 rounded-lg transition-colors shadow-lg ${currentView === 'admin' ? 'bg-indigo-600' : currentView === 'weekly' ? 'bg-emerald-600' : 'bg-blue-600'}`}><LayoutDashboard className="w-6 h-6 text-white" /></div>
             <h1 className="text-xl md:text-2xl font-black uppercase tracking-tight truncate">{currentView === 'admin' ? 'Administração' : currentView === 'weekly' ? 'Semanal' : 'Auditoria'}</h1>
           </div>
-          {currentView === 'dashboard' && hasData && (
-            <div className="flex gap-2 items-center">
-              {/* Desktop Only Buttons */}
-              <div className="relative">
-                <button
-                  onClick={handleCopyReport}
-                  className="hidden md:flex p-2 text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
-                  title="Copiar Relatório"
-                >
-                  <CopyIcon className="w-5 h-5" />
-                </button>
-                {showCopySuccess && (
-                  <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2.5 py-1 bg-emerald-500 text-white text-[9px] font-black uppercase tracking-widest rounded-lg shadow-lg shadow-emerald-100 animate-in fade-in slide-in-from-top-1 duration-300 z-50 whitespace-nowrap flex items-center gap-1">
-                    <Check className="w-2.5 h-2.5" /> Copiado!
-                  </div>
-                )}
-              </div>
-              <button onClick={handleExportImage} className="hidden md:flex p-2 text-purple-600 bg-purple-50 rounded-lg hover:bg-purple-100 transition-colors" title="Baixar Imagem"><Download className="w-5 h-5" /></button>
-              {canEdit && <button onClick={triggerHeaderFileUpload} className="hidden md:flex p-2 text-emerald-600 bg-emerald-50 rounded-lg hover:bg-emerald-100 transition-colors" title="Nova Importação"><FilePlus className="w-5 h-5" /></button>}
+          <div className="flex gap-2 items-center">
+            {/* Action Buttons Group */}
+            {hasData && (
+              <>
+                <div className="relative">
+                  <button
+                    onClick={handleCopyReport}
+                    className="hidden md:flex p-2 text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
+                    title="Copiar Relatório"
+                  >
+                    <CopyIcon className="w-5 h-5" />
+                  </button>
+                  {showCopySuccess && (
+                    <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2.5 py-1 bg-emerald-500 text-white text-[9px] font-black uppercase tracking-widest rounded-lg shadow-lg shadow-emerald-100 animate-in fade-in slide-in-from-top-1 duration-300 z-50 whitespace-nowrap flex items-center gap-1">
+                      <Check className="w-2.5 h-2.5" /> Copiado!
+                    </div>
+                  )}
+                </div>
+                <button onClick={handleExportImage} className="hidden md:flex p-2 text-purple-600 bg-purple-50 rounded-lg hover:bg-purple-100 transition-colors" title="Baixar Imagem"><Download className="w-5 h-5" /></button>
+              </>
+            )}
 
-              {/* Mobile Only Share Button */}
+            {/* Refresh Button (New) */}
+            <button
+              onClick={() => window.location.reload()}
+              className="p-2 text-slate-600 bg-slate-50 rounded-lg hover:bg-slate-100 transition-colors"
+              title="Atualizar Dados e Voltar para Hoje"
+            >
+              <RefreshCcw className="w-5 h-5" />
+            </button>
+
+            {/* Import Button */}
+            {canEdit && <button onClick={triggerHeaderFileUpload} className="hidden md:flex p-2 text-emerald-600 bg-emerald-50 rounded-lg hover:bg-emerald-100 transition-colors" title="Nova Importação"><FilePlus className="w-5 h-5" /></button>}
+
+            {/* Mobile Only Share Button */}
+            {hasData && (
               <button
                 onClick={handleShareReport}
                 disabled={isSyncing}
@@ -931,8 +946,8 @@ const App: React.FC = () => {
               >
                 {isSyncing ? <Loader2 className="w-6 h-6 animate-spin" /> : <Share2 className="w-6 h-6" />}
               </button>
-            </div>
-          )}
+            )}
+          </div>
         </header>
 
         <main className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-8 min-h-[calc(100vh-80px)]">
