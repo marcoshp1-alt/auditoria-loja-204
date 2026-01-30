@@ -344,6 +344,24 @@ const WeeklySummary: React.FC<WeeklySummaryProps> = ({ history, userProfile, sel
     return 'text-emerald-600 bg-emerald-50 border-emerald-100';
   };
 
+  // Helper para formatar data igual ao histórico (com hora)
+  const getDisplayDate = (item: HistoryItem) => {
+    if (item.customDate) {
+      const parts = item.customDate.split('-');
+      if (parts.length === 3) {
+        const [y, m, d] = parts;
+        return `${d}/${m}/${y}`;
+      }
+    }
+    return new Date(item.timestamp).toLocaleString('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    }).replace(',', ' às');
+  };
+
   const renderDayItem = (label: string, item: HistoryItem | null) => {
     const isAnalysis = item?.reportType === 'analysis' || item?.reportType === 'final_rupture' || item?.reportType === 'rupture';
 
@@ -383,7 +401,7 @@ const WeeklySummary: React.FC<WeeklySummaryProps> = ({ history, userProfile, sel
 
         <div className="flex items-center justify-between pt-1 border-t border-slate-100/50 mt-1">
           <span className="text-[9px] font-bold truncate opacity-60">
-            {item ? new Date(item.timestamp).toLocaleDateString('pt-BR') : 'Pendente'}
+            {item ? getDisplayDate(item) : 'Pendente'}
           </span>
           {item && (
             <div className="flex flex-col items-end gap-1">

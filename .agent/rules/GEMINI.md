@@ -97,11 +97,15 @@ When auto-applying an agent, inform the user:
 
 ### 🌐 Language Handling
 
-When user's prompt is NOT in English:
+### 🌐 Language Handling
 
-1. **Internally translate** for better comprehension
-2. **Respond in user's language** - match their communication
-3. **Code comments/variables** remain in English
+**MANDATORY: Always communicate in Portuguese (pt-BR).**
+
+1. **User Prompt Language**: Ignore the output language of the user's prompt (if English, Spanish, etc.) and ALWAYS respond in **Portuguese**.
+2. **Translation**: Internally understand the request, but the output must be in Portuguese. 
+3. **Code**:  
+    - Comments: Portuguese (unless codebase uses English standard).  
+    - Variables/Functions: Keep English (standard practice) or match existing codebase style.
 
 ### 🧹 Clean Code (Global Mandatory)
 
@@ -142,6 +146,28 @@ When user's prompt is NOT in English:
 1. What is the GOAL of this agent/skill?
 2. What PRINCIPLES must I apply?
 3. How does this DIFFER from generic output?
+
+### ⚡ Aggressive Auto-Run Protocol
+
+**USER PREFERENCE: MAX SPEED.**
+Unless a command is clearly destructive (deleting input files, dropping databases, `rm -rf`), you MUST set `SafeToAutoRun: true`.
+- `npm run ...` -> **TRUE**
+- `git add .` -> **TRUE**
+- `git commit` -> **TRUE**
+- File creation/move -> **TRUE**
+- **Exception**: `git push` (ask first if major changes), `rm` (warn user).
+
+### 🧠 Auto-Memory Protocol (Always Active)
+
+**MANDATORY: You must maintain the project's persistent memory.**
+
+1.  **Read:** At the start of every session, read `PROJECT_STATUS.md` in the **project root**.
+    - If it does not exist, **CREATE IT** immediately using the standard template.
+2.  **Write (Auto):** AFTER completing any significant task (and BEFORE `notify_user` to finish), you MUST update `PROJECT_STATUS.md` (root).
+    - Update "Estado Atual"
+    - Check off items in "Em Progresso"
+    - Add new "Próximos Passos"
+3.  **No Asking:** Do NOT ask the user if they want this. Just do it silently as part of your cleanup.
 
 ---
 
