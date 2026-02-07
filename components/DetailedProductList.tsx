@@ -13,6 +13,7 @@ interface DetailedProductListProps {
 
 const DetailedProductList: React.FC<DetailedProductListProps> = ({ data, category, onClose, onShowToast }) => {
   const [searchTerm, setSearchTerm] = useState('');
+  const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' } | null>(null);
 
   const normalizeItem = (item: any) => ({
     c: item.c !== undefined ? item.c : item.codigo,
@@ -20,22 +21,62 @@ const DetailedProductList: React.FC<DetailedProductListProps> = ({ data, categor
     e: item.e !== undefined ? item.e : item.estoque,
     r: item.r !== undefined ? item.r : item.classeRaiz,
     l: item.l !== undefined ? item.l : item.local,
-    s: item.s !== undefined ? item.s : item.situacao
+    s: item.s !== undefined ? item.s : item.situacao,
+    d: item.d !== undefined ? item.d : (item.diasSemVenda || 0),
+    u: item.u !== undefined ? item.u : (item.ultimaCompra || "")
   });
 
   const filteredData = useMemo(() => {
-    if (!searchTerm) return data;
-    const low = searchTerm.toLowerCase();
-    return data.filter(item => {
-      const norm = normalizeItem(item);
-      return (
-        norm.p.toLowerCase().includes(low) ||
-        String(norm.c).includes(low) ||
-        norm.r.toLowerCase().includes(low) ||
-        norm.l.toLowerCase().includes(low)
-      );
-    });
-  }, [data, searchTerm]);
+    let result = [...data];
+
+    // 1. Filtro de Busca
+    if (searchTerm) {
+      const low = searchTerm.toLowerCase();
+      result = result.filter(item => {
+        const norm = normalizeItem(item);
+        return (
+          norm.p.toLowerCase().includes(low) ||
+          String(norm.c).includes(low) ||
+          norm.r.toLowerCase().includes(low) ||
+          norm.l.toLowerCase().includes(low)
+        );
+      });
+    }
+
+    // 2. Ordenação
+    if (sortConfig) {
+      result.sort((a, b) => {
+        const normA = normalizeItem(a);
+        const normB = normalizeItem(b);
+
+        let valA = (normA as any)[sortConfig.key];
+        let valB = (normB as any)[sortConfig.key];
+
+        // Tratar números
+        if (typeof valA === 'number' && typeof valB === 'number') {
+          return sortConfig.direction === 'asc' ? valA - valB : valB - valA;
+        }
+
+        // Tratar strings
+        valA = String(valA).toLowerCase();
+        valB = String(valB).toLowerCase();
+
+        if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
+        if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
+
+    return result;
+  }, [data, searchTerm, sortConfig]);
+
+  const handleSort = (key: string) => {
+    let direction: 'asc' | 'desc' = 'asc';
+    if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc';
+    }
+    setSortConfig({ key, direction });
+  };
 
   const displayTitle = useMemo(() => {
     const cat = category.toLowerCase();
@@ -56,6 +97,8 @@ const DetailedProductList: React.FC<DetailedProductListProps> = ({ data, categor
         'Produto': norm.p,
         'Local': norm.l,
         'Estoque Atual': norm.e,
+        'Dias sem Venda': norm.d,
+        'Última Compra': norm.u,
         'Classe Raiz': norm.r
       };
     });
@@ -71,6 +114,8 @@ const DetailedProductList: React.FC<DetailedProductListProps> = ({ data, categor
       { wch: 50 }, // Produto
       { wch: 15 }, // Local
       { wch: 15 }, // Estoque
+      { wch: 15 }, // Dias sem Venda
+      { wch: 20 }, // Última Compra
       { wch: 30 }  // Classe
     ];
     worksheet['!cols'] = wscols;
@@ -141,20 +186,86 @@ const DetailedProductList: React.FC<DetailedProductListProps> = ({ data, categor
         <table className="min-w-full border-collapse">
           <thead>
             <tr className="bg-white border-b border-slate-100">
-              <th className="px-8 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] bg-slate-50/30">
-                <div className="flex items-center gap-2"><Hash className="w-3.5 h-3.5" /> Código</div>
+              <th
+                className="px-8 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] bg-slate-50/30 cursor-pointer hover:bg-blue-50 transition-colors"
+                onClick={() => handleSort('c')}
+              >
+                <div className="flex items-center gap-2">
+                  <Hash className="w-3.5 h-3.5" />
+                  Código
+                  {sortConfig?.key === 'c' && (
+                    <span className="text-blue-600 ml-1">{sortConfig.direction === 'asc' ? '↑' : '↓'}</span>
+                  )}
+                </div>
               </th>
-              <th className="px-8 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">
-                <div className="flex items-center gap-2"><Package className="w-3.5 h-3.5" /> Produto</div>
+              <th
+                className="px-8 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] cursor-pointer hover:bg-blue-50 transition-colors"
+                onClick={() => handleSort('p')}
+              >
+                <div className="flex items-center gap-2">
+                  <Package className="w-3.5 h-3.5" />
+                  Produto
+                  {sortConfig?.key === 'p' && (
+                    <span className="text-blue-600 ml-1">{sortConfig.direction === 'asc' ? '↑' : '↓'}</span>
+                  )}
+                </div>
               </th>
-              <th className="px-8 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] bg-slate-50/30">
-                <div className="flex items-center gap-2"><MapPin className="w-3.5 h-3.5" /> Local</div>
+              <th
+                className="px-8 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] bg-slate-50/30 cursor-pointer hover:bg-blue-50 transition-colors"
+                onClick={() => handleSort('l')}
+              >
+                <div className="flex items-center gap-2">
+                  <MapPin className="w-3.5 h-3.5" />
+                  Local
+                  {sortConfig?.key === 'l' && (
+                    <span className="text-blue-600 ml-1">{sortConfig.direction === 'asc' ? '↑' : '↓'}</span>
+                  )}
+                </div>
               </th>
-              <th className="px-8 py-3 text-center text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">
-                Estoque Atual
+              <th
+                className="px-5 py-3 text-center text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] cursor-pointer hover:bg-blue-50 transition-colors"
+                onClick={() => handleSort('e')}
+              >
+                <div className="flex items-center justify-center gap-1">
+                  Estoque
+                  {sortConfig?.key === 'e' && (
+                    <span className="text-blue-600">{sortConfig.direction === 'asc' ? '↑' : '↓'}</span>
+                  )}
+                </div>
               </th>
-              <th className="px-8 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] bg-slate-50/30">
-                <div className="flex items-center gap-2"><Layers className="w-3.5 h-3.5" /> Classe Raiz</div>
+              <th
+                className="px-5 py-3 text-center text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] bg-slate-50/30 cursor-pointer hover:bg-blue-50 transition-colors"
+                onClick={() => handleSort('d')}
+              >
+                <div className="flex items-center justify-center gap-1">
+                  Dias s/ Venda
+                  {sortConfig?.key === 'd' && (
+                    <span className="text-blue-600">{sortConfig.direction === 'asc' ? '↑' : '↓'}</span>
+                  )}
+                </div>
+              </th>
+              <th
+                className="px-5 py-3 text-center text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] cursor-pointer hover:bg-blue-50 transition-colors"
+                onClick={() => handleSort('u')}
+              >
+                <div className="flex items-center justify-center gap-1">
+                  Últ. Compra
+                  {sortConfig?.key === 'u' && (
+                    <span className="text-blue-600">{sortConfig.direction === 'asc' ? '↑' : '↓'}</span>
+                  )}
+                </div>
+              </th>
+              <th
+                className="px-8 py-3 text-left text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] bg-slate-50/30 cursor-pointer hover:bg-blue-50 transition-colors"
+                onClick={() => handleSort('r')}
+              >
+                <div className="flex items-center gap-2">
+                  <Layers className="w-3.5 h-3.5" />
+                  Classe Raiz
+                  {sortConfig?.key === 'r' && (
+                    <span className="text-blue-600 ml-1">{sortConfig.direction === 'asc' ? '↑' : '↓'}</span>
+                  )}
+                </div>
               </th>
             </tr>
           </thead>
@@ -195,9 +306,23 @@ const DetailedProductList: React.FC<DetailedProductListProps> = ({ data, categor
                     </td>
 
                     {/* Estoque Atual */}
-                    <td className="px-8 py-2 whitespace-nowrap text-center">
-                      <span className="inline-flex items-center justify-center px-4 py-1.5 rounded-xl bg-slate-100 text-slate-700 font-black text-sm min-w-[60px] border border-slate-200 group-hover:bg-blue-600 group-hover:text-white group-hover:border-blue-700 transition-all">
+                    <td className="px-5 py-2 whitespace-nowrap text-center">
+                      <span className="inline-flex items-center justify-center px-3 py-1 rounded-xl bg-slate-100 text-slate-700 font-black text-[11px] min-w-[50px] border border-slate-200 group-hover:bg-blue-600 group-hover:text-white group-hover:border-blue-700 transition-all font-mono">
                         {norm.e}
+                      </span>
+                    </td>
+
+                    {/* Dias sem venda */}
+                    <td className="px-5 py-2 whitespace-nowrap text-center bg-slate-50/20 group-hover:bg-transparent">
+                      <span className="text-[11px] font-black text-slate-600 group-hover:text-blue-700 font-mono">
+                        {norm.d}
+                      </span>
+                    </td>
+
+                    {/* Última Compra */}
+                    <td className="px-5 py-2 whitespace-nowrap text-center">
+                      <span className="text-[10px] font-bold text-slate-400 group-hover:text-slate-600 font-mono">
+                        {norm.u || "--"}
                       </span>
                     </td>
 

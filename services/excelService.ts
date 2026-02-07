@@ -20,6 +20,35 @@ const sanitizeName = (name: string): string => {
   return parts.length > 0 ? parts[0] : cleaned;
 };
 
+/**
+ * Converte data serial do Excel (ex: 45231) para string formatada DD/MM/AAAA
+ */
+const formatExcelDate = (value: any): string => {
+  if (!value) return "";
+  if (typeof value === 'number') {
+    // Excel base date is 1899-12-30
+    const date = new Date(Math.round((value - 25569) * 86400 * 1000));
+    return date.toLocaleDateString('pt-BR');
+  }
+  return String(value);
+};
+
+/**
+ * Busca valor em um objeto de forma insensível a maiúsculas/minúsculas e acentos
+ */
+const findValueByPossibleKeys = (row: any, keywords: string[]): any => {
+  const keys = Object.keys(row);
+  const normalizedKeywords = keywords.map(k => k.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, ""));
+
+  for (const key of keys) {
+    const normalizedKey = key.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    if (normalizedKeywords.some(k => normalizedKey.includes(k) || k.includes(normalizedKey))) {
+      return row[key];
+    }
+  }
+  return undefined;
+};
+
 export const parseExcelFile = (file: File): Promise<AuditRow[]> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -256,13 +285,20 @@ export const parseProductClassFile = (file: File): Promise<ProductClassResult> =
           const isRelevant = isOutOfStock || isOutdated || isNoRead || isNoPresence;
 
           if (isRelevant) {
+            // Detecção mais robusta de colunas para Dias sem Venda e Última Compra
+            const daysWithoutSale = findValueByPossibleKeys(normalizedRow, ["Dias sem Venda", "Dias s/ Venda", "Dias sem venda", "Dias s Venda"]) || "";
+            const lastPurchaseRaw = findValueByPossibleKeys(normalizedRow, ["Dt. Ult. Compra", "Ultima Compra", "Data Ult. Compra", "Data Ultima Compra", "Dt. Ult. Cpa", "Ultima Entrada", "Dt. Entrada"]) || "";
+            const lastPurchase = formatExcelDate(lastPurchaseRaw);
+
             details.push({
               c: normalizedRow["Código"] || "",
               p: String(normalizedRow["Produto"] || ""),
               e: stock,
               r: sanitizeName(rootClass ? String(rootClass) : "OUTROS"),
               l: String(normalizedRow["Local"] || "S/N"),
-              s: status
+              s: status,
+              d: daysWithoutSale,
+              u: String(lastPurchase)
             });
           }
         });

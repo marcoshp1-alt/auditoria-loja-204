@@ -6,8 +6,8 @@
 ## 🎯 Objetivo Principal
 Atualizar o sistema de auditoria para o novo modelo Mobile e ajustar funcionalidades mensais usando PocketBase como backend.
 
-## 📅 Estado Atual (Última Atualização: Hoje)
-- **Fase**: Desenvolvimento Ativo / Ajustes Finos
+## 📅 Estado Atual (Última Atualização: Agora)
+- **Fase**: Deploy Realizado / Sincronizado com GitHub
 - **Backend**: PocketBase (Integrado)
 - **Frontend**: React + Vite (Em execução)
 
@@ -17,6 +17,7 @@ Atualizar o sistema de auditoria para o novo modelo Mobile e ajustar funcionalid
 - [x] Implementar Protocolo de Auto-Memória (Automático)
 - [x] Mover `PROJECT_STATUS.md` para a raiz do projeto (Para portabilidade)
 - [x] Corrigir formato de data no Resumo Semanal (Igual ao Histórico)
+- [x] Realizar deploy/push para GitHub
 
 ## ✅ Histórico Recente (Recuperado)
 - Configuração do ambiente local (`npm run dev` funcionando).
@@ -24,6 +25,7 @@ Atualizar o sistema de auditoria para o novo modelo Mobile e ajustar funcionalid
 - Criação e movimentação do `PROJECT_STATUS.md` para a raiz.
 - Ajuste nas regras para criar/ler `PROJECT_STATUS.md` na raiz se não existir.
 - Implementação de exibição de data/hora no `WeeklySummary.tsx`.
+- Deploy das últimas alterações para o repositório GitHub.
 
 ## 📝 Próximos Passos Sugeridos
 1. Mapear funcionalidades pendentes do Mobile.

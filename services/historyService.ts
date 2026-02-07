@@ -1,6 +1,16 @@
 import { pb } from './pocketbase';
 import { HistoryItem, UserProfile } from '../types';
 
+// Helper para extrair data do nome do arquivo (dd-mm-yyyy ou dd_mm_yyyy)
+const extractDateFromFileName = (fileName: string): string | null => {
+  const match = fileName.match(/(\d{2})[-_](\d{2})[-_](\d{4})/);
+  if (match) {
+    const [_, d, m, y] = match;
+    return `${y}-${m}-${d}`; // Formato ISO YYYY-MM-DD
+  }
+  return null;
+};
+
 // Busca apenas metadados leves para a barra lateral e listagens
 export const fetchHistory = async (profile: UserProfile): Promise<HistoryItem[]> => {
   try {
@@ -133,10 +143,30 @@ export const addHistoryItem = async (item: HistoryItem): Promise<void> => {
       }
     }
 
+    // --- GARANTIA DE DATA (ROBUSTEZ) ---
+    let finalCustomDate = item.customDate;
+
+    if (!finalCustomDate) {
+      // Tenta extrair do nome do arquivo
+      finalCustomDate = extractDateFromFileName(item.fileName);
+
+      // Se ainda não tiver, usa a data atual do sistema como fallback fixo
+      if (!finalCustomDate) {
+        const now = new Date();
+        const y = now.getFullYear();
+        const m = String(now.getMonth() + 1).padStart(2, '0');
+        const d = String(now.getDate()).padStart(2, '0');
+        finalCustomDate = `${y}-${m}-${d}`;
+        console.log(`📅 Data auto-atribuída para ${item.fileName}: ${finalCustomDate} (Atual)`);
+      } else {
+        console.log(`📅 Data extraída do arquivo ${item.fileName}: ${finalCustomDate}`);
+      }
+    }
+
     const payload = {
       fileName: item.fileName,
       reportType: item.reportType,
-      customDate: item.customDate || null,
+      customDate: finalCustomDate,
       stats: item.stats,
       data: item.data || [],
       classDetails: item.classDetails || [],

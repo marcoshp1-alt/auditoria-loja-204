@@ -44,6 +44,8 @@ const App: React.FC = () => {
   const [customDate, setCustomDate] = useState<string | null>(null);
   const [activeReportId, setActiveReportId] = useState<string>('');
   const [activeLoja, setActiveLoja] = useState<string>('');
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [allProfiles, setAllProfiles] = useState<UserProfile[]>([]);
 
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => {
@@ -101,72 +103,133 @@ const App: React.FC = () => {
   };
 
   const fetchProfile = useCallback(async (user: any) => {
-    try {
-      // No PocketBase, o perfil já vem no authStore ou buscamos na coleção 'profiles'
-      const userId = user.id;
+    console.log('🔍 [Profile] Iniciando fetchProfile (PB) para:', user.id);
 
+    // Cache rápido para evitar spinner longo
+    const cacheKey = `pb_profile_${user.id}`;
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        setProfile(parsed);
+        console.log('📦 [Profile] Usando cache temporário:', parsed.username);
+      } catch (e) { localStorage.removeItem(cacheKey); }
+    }
+
+    try {
+      const userId = user.id;
+      console.log('🔍 [Deduplicate] Verificando integridade do perfil para:', userId);
       let profileData: any = null;
       try {
-        profileData = await pb.collection('profiles').getFirstListItem(`user="${userId}"`, { requestKey: null });
-      } catch (e: any) {
-        // Silenciar erro de autocancelamento ou apenas informar que o perfil será criado
-        if (!e.isAbort && e.status !== 0) {
+        // Busca todos os registros para este usuário para limpar duplicatas
+        const allProfiles = await pb.collection('profiles').getFullList({
+          filter: `user="${userId}"`,
+          sort: '-created', // O mais novo primeiro
+          requestKey: null
+        });
+
+        if (allProfiles.length > 1) {
+          console.warn(`⚠️ [Deduplicate] Detectados ${allProfiles.length} registros para o usuário. Limpando...`);
+          profileData = allProfiles[0];
+          // Deleta os registros antigos/duplicados
+          for (let i = 1; i < allProfiles.length; i++) {
+            await pb.collection('profiles').delete(allProfiles[i].id).catch(e => console.error("Erro ao deletar duplicata:", e));
+          }
+          console.log('✅ [Deduplicate] Banco saneado. Mantido apenas ID:', profileData.id);
+        } else {
+          profileData = allProfiles[0] || null;
+        }
+
+        if (!profileData) {
           console.warn("Perfil não encontrado na coleção 'profiles', usando dados básicos.");
+        }
+      } catch (e: any) {
+        if (!e.isAbort && e.status !== 0) {
+          console.error("Erro ao buscar/deduplicar perfis:", e);
         }
       }
 
+      // REGRA DE OURO: Mesmos emails do Supabase para consistência
+      const isAdminEmail = user.email === 'marcos@sistema.local' || user.email === 'admin@auditoria.com' || user.email === 'admin@sistema.local' || user.username === 'admin';
 
       const mergedProfile: UserProfile = {
         id: userId,
-        username: profileData?.username || user.username || user.email || 'usuário',
-        role: profileData?.role || user.role || 'user',
+        username: profileData?.username || user.username || user.email?.split('@')[0] || 'usuário',
+        role: profileData?.role || (isAdminEmail ? 'admin' : 'user'),
         loja: profileData?.loja || user.loja || '204',
-        visibleLojas: [] // Inicializa vazio para ser populado abaixo
+        regional: profileData?.regional || 'NE 2',
+        visibleLojas: []
       };
 
-      // ⚠️ WORKAROUND: Forçar admin estritamente para o usuário principal "admin"
-      if (user.username === 'admin') {
+      if (isAdminEmail || profileData?.role === 'admin') {
         mergedProfile.role = 'admin';
-        console.log('🔧 FORÇADO: Usuário admin detectado, role definido como admin');
       }
 
-      // Se for admin, o campo 'visibleLojas' contém a lista CSV de lojas que ele pode ver
-      // O campo 'loja' deve conter apenas a sua loja base (ID único)
       if (mergedProfile.role === 'admin') {
-        // 1. Limpa o campo loja caso contenha CSV (erro antigo)
         if (mergedProfile.loja && mergedProfile.loja.includes(',')) {
           mergedProfile.loja = mergedProfile.loja.split(',')[0].trim();
         }
 
-        // 2. Carrega lojas visíveis do novo campo, com fallback para loja se necessário
         const rawVisible = profileData?.visible_lojas || profileData?.visibleLojas || "";
-        console.log('📊 Campos do Profile:', Object.keys(profileData || {}));
-        console.log('📦 Conteúdo visibleLojas bruto:', rawVisible);
-
         const visibleList = String(rawVisible).split(',')
           .map((l: string) => l.trim())
           .filter((l: string) => l !== '' && l.length < 10);
 
         mergedProfile.visibleLojas = visibleList.length > 0 ? visibleList : [mergedProfile.loja];
-        console.log('🎯 visibleLojas processadas:', mergedProfile.visibleLojas);
+        mergedProfile.regional = profileData?.regional || mergedProfile.regional;
       }
 
-      console.log('👤 Perfil final aplicado:', mergedProfile);
+      // Salva no cache
+      localStorage.setItem(cacheKey, JSON.stringify(mergedProfile));
 
       setProfile(mergedProfile);
+      setUserProfile(mergedProfile);
+
       setActiveLoja(prev => {
-        // Se a loja anterior estiver corrompida por CSV, limpa
         if (prev && prev.includes(',')) return mergedProfile.loja;
         return prev || mergedProfile.loja;
       });
 
-      console.log('✅ Perfil carregado com sucesso:', mergedProfile.username, 'Lojas:', mergedProfile.visibleLojas);
+      return mergedProfile;
     } catch (err: any) {
       if (!err.isAbort && err.status !== 0) {
-        console.error("Erro fatal no carregamento do perfil:", err);
+        console.error("Erro fatal no perfil:", err);
       }
+      return null;
     } finally {
       setAuthLoading(false);
+    }
+  }, []);
+
+  const handleAuthChange = useCallback(async (user: any, profile: UserProfile | null) => {
+    setUserProfile(profile);
+    if (!user) {
+      setHistory([]);
+      setAllProfiles([]);
+      return;
+    }
+    if (profile) {
+      const hist = await fetchHistory(profile);
+      setHistory(hist);
+
+      if (profile) {
+        try {
+          // Carregar perfis para TODOS para permitir agrupamento no resumo
+          const records = await pb.collection('profiles').getFullList({
+            fields: 'user,username,role,loja,regional',
+            requestKey: null
+          });
+          setAllProfiles(records.map((r: any) => ({
+            id: r.user,
+            username: r.username,
+            role: r.role,
+            loja: r.loja,
+            regional: r.regional || 'NE 2'
+          })));
+        } catch (e) {
+          console.error('Error fetching all profiles:', e);
+        }
+      }
     }
   }, []);
 
@@ -267,7 +330,7 @@ const App: React.FC = () => {
       const savedItem = updatedHistory[0];
       if (savedItem) {
         // Apenas assume como "ativo" se estivermos no dashboard.
-        // Se estivermos no Resumo Semanal (ex: importando ruptura), 
+        // Se estivermos no Resumo Semanal (ex: importando ruptura),
         // não queremos travar a navegação lateral selecionando um item específico.
         if (currentView === 'dashboard') {
           setActiveReportId(savedItem.id);
@@ -803,33 +866,57 @@ const App: React.FC = () => {
   }, [classDetails, selectedCategory]);
 
   // 4. EFFECT HOOKS
+  // 4. EFFECT HOOKS
   useEffect(() => {
-    // Verificar sessão inicial do PocketBase
-    if (pb.authStore.isValid) {
-      setSession(pb.authStore.model);
-      fetchProfile(pb.authStore.model);
+    let isMounted = true;
+    let authProcessed = false;
+
+    const processSession = async (model: any) => {
+      // Evita processar a mesma sessão duas vezes
+      if (!isMounted || (authProcessed && model?.id === profile?.id)) return;
+
+      authProcessed = true;
+      setSession(model);
+
+      if (model) {
+        console.log('👤 [Auth] Usuário detectado (PB):', model.username || model.email);
+        const userProfileData = await fetchProfile(model);
+        if (isMounted) {
+          handleAuthChange(model, userProfileData);
+        }
+      } else {
+        console.log('👋 [Auth] Sem sessão ativa (PB).');
+        setProfile(null);
+        setHistory([]);
+        setData([]);
+        setClassDetails([]);
+        setHasAutoSelected(false);
+        setAuthLoading(false);
+        handleAuthChange(null, null);
+      }
+    };
+
+    // 1. Verificação inicial
+    if (pb.authStore.isValid && pb.authStore.model) {
+      processSession(pb.authStore.model);
     } else {
       setAuthLoading(false);
     }
 
-    // Listener para mudanças na store do PocketBase
-    const removeListener = pb.authStore.onChange((token, model) => {
-      setSession(model);
-      if (model) {
-        fetchProfile(model);
-      } else {
-        setProfile(null);
-        setHistory([]);
-        setData([]);
-        setHasAutoSelected(false);
-        setCurrentView('dashboard');
-        setActiveLoja('');
-        setAuthLoading(false);
+    // 2. Listener de mudanças
+    const removeListener = pb.authStore.onChange(async (token, model) => {
+      console.log('📡 [Auth] Mudança detectada na store (PB)');
+      if (isMounted) {
+        if (!model) authProcessed = false;
+        processSession(model);
       }
     });
 
-    return () => removeListener();
-  }, [fetchProfile]);
+    return () => {
+      isMounted = false;
+      removeListener();
+    };
+  }, [fetchProfile, handleAuthChange, profile?.id]);
 
   useEffect(() => {
     if (session && profile) {
@@ -844,7 +931,15 @@ const App: React.FC = () => {
         const itemDate = item.customDate || new Date(item.timestamp).toLocaleDateString('en-CA');
         return itemDate === today;
       });
-      if (todayItems.length > 0) handleHistorySelect(todayItems[0]);
+
+      if (todayItems.length > 0) {
+        // Se tem auditoria hoje, seleciona a mais recente
+        handleHistorySelect(todayItems[0]);
+      } else {
+        // Se não tem nada hoje, vai para o Resumo Semanal
+        console.log('📅 [AutoSelect] Nenhuma auditoria hoje, indo para Resumo Semanal.');
+        setCurrentView('weekly');
+      }
       setHasAutoSelected(true);
     }
   }, [history, hasAutoSelected, data.length, classDetails.length, currentView, handleHistorySelect]);
@@ -958,10 +1053,28 @@ const App: React.FC = () => {
             </div>
           )}
 
-          {currentView === 'admin' ? <AdminPanel profile={profile} onShowToast={showToast} onProfileUpdate={(newProfile) => {
-            setProfile(newProfile);
-            // O useEffect que observa 'profile' irá disparar o loadHistory automaticamente
-          }} /> : currentView === 'weekly' ? <WeeklySummary history={history} userProfile={profile} selectedDate={customDate} onSelectAudit={handleHistorySelect} onDateChange={setCustomDate} onImportFinalRupture={handleFinalRuptureFileSelect} /> : (
+          {currentView === 'admin' ? (
+            <AdminPanel profile={profile} onShowToast={showToast} onProfileUpdate={(newProfile) => {
+              console.log('🔄 [App] Sincronizando Perfil Editado:', newProfile.username);
+              setProfile(newProfile);
+              setUserProfile(newProfile);
+              // Atualiza cache local para evitar regressão no refresh
+              if (newProfile.id) {
+                localStorage.setItem(`pb_profile_${newProfile.id}`, JSON.stringify(newProfile));
+              }
+              loadHistory();
+            }} />
+          ) : currentView === 'weekly' ? (
+            <WeeklySummary
+              history={history}
+              userProfile={profile}
+              allProfiles={allProfiles}
+              selectedDate={customDate}
+              onSelectAudit={handleHistorySelect}
+              onDateChange={setCustomDate}
+              onImportFinalRupture={handleFinalRuptureFileSelect}
+            />
+          ) : (
             !hasData ? (
               canEdit ? (
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -969,8 +1082,15 @@ const App: React.FC = () => {
                   <FileUpload onFileSelect={handleAnalysisFileSelect} isLoading={loading} title="Importar Análise" subtitle="Planilha Detalhada" variant="purple" />
                   <FileUpload onFileSelect={handleClassFileSelect} isLoading={loading} title="Classe de Produto" subtitle="Itens por Classe" variant="orange" />
                 </div>
-              ) :
-                <div className="mt-20 flex flex-col items-center text-center"><div className="bg-white p-12 rounded-[50px] shadow-2xl max-w-lg"><FileSearch className="w-12 h-12 text-slate-300 mx-auto mb-8" /><h3 className="text-2xl font-black mb-4 uppercase">Visualização de Dados</h3><p className="text-slate-500">Selecione um relatório no menu lateral para visualizar os dados salvos.</p></div></div>
+              ) : (
+                <div className="mt-20 flex flex-col items-center text-center">
+                  <div className="bg-white p-12 rounded-[50px] shadow-2xl max-w-lg">
+                    <FileSearch className="w-12 h-12 text-slate-300 mx-auto mb-8" />
+                    <h3 className="text-2xl font-black mb-4 uppercase">Visualização de Dados</h3>
+                    <p className="text-slate-500">Selecione um relatório no menu lateral para visualizar os dados salvos.</p>
+                  </div>
+                </div>
+              )
             ) : (
               <div ref={reportRef} key={activeReportId || 'new'} className="animate-in fade-in slide-in-from-top-4 duration-500">
                 <div className="flex flex-col gap-1 mb-6 text-center md:text-left">
@@ -1044,90 +1164,94 @@ const App: React.FC = () => {
             )
           )}
         </main>
-      </div>
+      </div >
 
-      {dbErrorModal.isOpen && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xl z-[150] flex items-center justify-center p-4">
-          <div className="bg-white rounded-[40px] shadow-2xl w-full max-w-2xl overflow-hidden animate-in zoom-in-95 duration-300 border border-red-100">
-            <div className="px-10 py-10 bg-red-50 flex flex-col items-center text-center relative">
-              <button onClick={() => setDbErrorModal({ ...dbErrorModal, isOpen: false })} className="absolute top-6 right-6 text-red-300 hover:text-red-500 p-2 hover:bg-white/50 rounded-full transition-all"><X className="w-7 h-7" /></button>
-              <div className="bg-red-600 p-6 rounded-[28px] shadow-xl shadow-red-200 mb-8 scale-110"><Database className="w-10 h-10 text-white" /></div>
-              <h3 className="text-3xl font-black text-slate-800 uppercase tracking-tight mb-4 leading-tight">{dbErrorModal.message}</h3>
-              <p className="text-slate-500 font-bold text-sm leading-relaxed px-10">Para utilizar relatórios de classe, você precisa garantir que sua coleção no PocketBase tenha todos os campos necessários. Entre em contato com o suporte ou verifique o esquema da coleção <strong>audit_history</strong>.</p>
-            </div>
+      {
+        dbErrorModal.isOpen && (
+          <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xl z-[150] flex items-center justify-center p-4">
+            <div className="bg-white rounded-[40px] shadow-2xl w-full max-w-2xl overflow-hidden animate-in zoom-in-95 duration-300 border border-red-100">
+              <div className="px-10 py-10 bg-red-50 flex flex-col items-center text-center relative">
+                <button onClick={() => setDbErrorModal({ ...dbErrorModal, isOpen: false })} className="absolute top-6 right-6 text-red-300 hover:text-red-500 p-2 hover:bg-white/50 rounded-full transition-all"><X className="w-7 h-7" /></button>
+                <div className="bg-red-600 p-6 rounded-[28px] shadow-xl shadow-red-200 mb-8 scale-110"><Database className="w-10 h-10 text-white" /></div>
+                <h3 className="text-3xl font-black text-slate-800 uppercase tracking-tight mb-4 leading-tight">{dbErrorModal.message}</h3>
+                <p className="text-slate-500 font-bold text-sm leading-relaxed px-10">Para utilizar relatórios de classe, você precisa garantir que sua coleção no PocketBase tenha todos os campos necessários. Entre em contato com o suporte ou verifique o esquema da coleção <strong>audit_history</strong>.</p>
+              </div>
 
-            <div className="p-8 space-y-6">
-              <div className="bg-slate-900 rounded-3xl p-6 border-2 border-slate-800 relative group overflow-hidden">
-                <div className="flex items-center justify-between mb-4 border-b border-slate-800 pb-3">
-                  <div className="flex items-center gap-2">
-                    <Terminal className="w-4 h-4 text-emerald-400" />
-                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Script SQL de Reparo</span>
+              <div className="p-8 space-y-6">
+                <div className="bg-slate-900 rounded-3xl p-6 border-2 border-slate-800 relative group overflow-hidden">
+                  <div className="flex items-center justify-between mb-4 border-b border-slate-800 pb-3">
+                    <div className="flex items-center gap-2">
+                      <Terminal className="w-4 h-4 text-emerald-400" />
+                      <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Script SQL de Reparo</span>
+                    </div>
+                    <button onClick={() => { navigator.clipboard.writeText(dbErrorModal.sql); showToast("SQL Copiado!"); }} className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all active:scale-90"><CopyIcon className="w-3.5 h-3.5" /> Copiar Código</button>
                   </div>
-                  <button onClick={() => { navigator.clipboard.writeText(dbErrorModal.sql); showToast("SQL Copiado!"); }} className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all active:scale-90"><CopyIcon className="w-3.5 h-3.5" /> Copiar Código</button>
+                  <pre className="font-mono text-[11px] text-emerald-400 overflow-x-auto whitespace-pre-wrap leading-relaxed select-all py-2 max-h-[150px] custom-scrollbar">
+                    {dbErrorModal.sql}
+                  </pre>
                 </div>
-                <pre className="font-mono text-[11px] text-emerald-400 overflow-x-auto whitespace-pre-wrap leading-relaxed select-all py-2 max-h-[150px] custom-scrollbar">
-                  {dbErrorModal.sql}
-                </pre>
-              </div>
 
-              <div className="flex gap-4">
-                <button onClick={() => setDbErrorModal({ ...dbErrorModal, isOpen: false })} className="w-full bg-slate-800 hover:bg-black text-white font-black py-4.5 rounded-2xl shadow-xl transition-all active:scale-95 uppercase text-[10px] tracking-widest">Entendi, Vou Executar</button>
+                <div className="flex gap-4">
+                  <button onClick={() => setDbErrorModal({ ...dbErrorModal, isOpen: false })} className="w-full bg-slate-800 hover:bg-black text-white font-black py-4.5 rounded-2xl shadow-xl transition-all active:scale-95 uppercase text-[10px] tracking-widest">Entendi, Vou Executar</button>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
-      {skuModal.isOpen && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[110] flex items-center justify-center p-4">
-          <div className="bg-white rounded-[40px] shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-300">
-            <div className="p-10 bg-blue-50 flex flex-col items-center text-center">
-              <div className="bg-blue-600 p-5 rounded-[24px] shadow-xl mb-6">
-                <Hash className="w-8 h-8 text-white" />
-              </div>
-              <h3 className="text-2xl font-black text-slate-800 uppercase tracking-tight mb-3">Informar SKU</h3>
-              <p className="text-slate-500 font-bold text-sm leading-relaxed mb-6">
-                Não encontramos uma auditoria para este dia. Informe o total de SKU da loja para calcularmos a parcial do relatório de classe.
-              </p>
-
-              <form onSubmit={handleManualSkuSubmit} className="w-full space-y-4">
-                <input
-                  type="number"
-                  required
-                  autoFocus
-                  value={manualSku}
-                  onChange={(e) => setManualSku(e.target.value)}
-                  placeholder="Ex: 12500"
-                  className="w-full px-6 py-4 bg-white border-2 border-blue-100 rounded-2xl font-black text-slate-700 focus:border-blue-500 outline-none text-center text-2xl transition-all"
-                />
-
-                <div className="flex gap-4 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSkuModal({ isOpen: false });
-                      if (!history.some(h => h.id === activeReportId)) {
-                        setData([]);
-                        setClassDetails([]);
-                        setActiveReportId('');
-                      }
-                    }}
-                    className="flex-1 px-6 py-4 rounded-2xl font-black text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-all uppercase text-[10px] tracking-widest"
-                  >
-                    Ignorar SKU
-                  </button>
-                  <button
-                    type="submit"
-                    className="flex-[2] bg-blue-600 hover:bg-blue-700 text-white font-black py-4.5 rounded-2xl shadow-xl shadow-blue-100 flex items-center justify-center gap-2 active:scale-95 uppercase text-[10px] tracking-widest"
-                  >
-                    <Check className="w-4 h-4" /> Confirmar SKU
-                  </button>
+      {
+        skuModal.isOpen && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[110] flex items-center justify-center p-4">
+            <div className="bg-white rounded-[40px] shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-300">
+              <div className="p-10 bg-blue-50 flex flex-col items-center text-center">
+                <div className="bg-blue-600 p-5 rounded-[24px] shadow-xl mb-6">
+                  <Hash className="w-8 h-8 text-white" />
                 </div>
-              </form>
+                <h3 className="text-2xl font-black text-slate-800 uppercase tracking-tight mb-3">Informar SKU</h3>
+                <p className="text-slate-500 font-bold text-sm leading-relaxed mb-6">
+                  Não encontramos uma auditoria para este dia. Informe o total de SKU da loja para calcularmos a parcial do relatório de classe.
+                </p>
+
+                <form onSubmit={handleManualSkuSubmit} className="w-full space-y-4">
+                  <input
+                    type="number"
+                    required
+                    autoFocus
+                    value={manualSku}
+                    onChange={(e) => setManualSku(e.target.value)}
+                    placeholder="Ex: 12500"
+                    className="w-full px-6 py-4 bg-white border-2 border-blue-100 rounded-2xl font-black text-slate-700 focus:border-blue-500 outline-none text-center text-2xl transition-all"
+                  />
+
+                  <div className="flex gap-4 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSkuModal({ isOpen: false });
+                        if (!history.some(h => h.id === activeReportId)) {
+                          setData([]);
+                          setClassDetails([]);
+                          setActiveReportId('');
+                        }
+                      }}
+                      className="flex-1 px-6 py-4 rounded-2xl font-black text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-all uppercase text-[10px] tracking-widest"
+                    >
+                      Ignorar SKU
+                    </button>
+                    <button
+                      type="submit"
+                      className="flex-[2] bg-blue-600 hover:bg-blue-700 text-white font-black py-4.5 rounded-2xl shadow-xl shadow-blue-100 flex items-center justify-center gap-2 active:scale-95 uppercase text-[10px] tracking-widest"
+                    >
+                      <Check className="w-4 h-4" /> Confirmar SKU
+                    </button>
+                  </div>
+                </form>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
       <ModalConfirm
         isOpen={deleteModal.isOpen} onClose={() => setDeleteModal({ ...deleteModal, isOpen: false })}
@@ -1155,65 +1279,67 @@ const App: React.FC = () => {
         onClose={() => setToast({ ...toast, visible: false })}
       />
 
-      {datePickerModal.isOpen && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4 animate-in fade-in duration-300">
-          <div className="bg-white rounded-[32px] shadow-2xl max-w-md w-full overflow-hidden border border-slate-100 animate-in zoom-in-95 slide-in-from-bottom-8 duration-300">
-            <div className="bg-blue-600 p-8 text-white relative">
-              <button
-                onClick={() => setDatePickerModal({ isOpen: false, reportId: '', currentDate: '' })}
-                className="absolute top-6 right-6 p-2 hover:bg-white/10 rounded-full transition-colors"
-              >
-                <X className="w-6 h-6" />
-              </button>
-              <div className="flex items-center gap-4 mb-2">
-                <div className="p-3 bg-white/10 rounded-2xl backdrop-blur-md">
-                  <Calendar className="w-8 h-8 text-white" />
-                </div>
-                <div>
-                  <h3 className="text-2xl font-black uppercase tracking-tight">Alterar Data</h3>
-                  <p className="text-blue-100 text-xs font-bold uppercase tracking-widest opacity-80">Ajuste o dia do relatório</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="p-8">
-              <div className="space-y-6">
-                <div>
-                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3 ml-1">Nova Data da Auditoria</label>
-                  <div className="relative group">
-                    <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-blue-600 transition-colors">
-                      <Calendar className="w-5 h-5" />
-                    </div>
-                    <input
-                      type="date"
-                      value={newDateValue}
-                      onChange={(e) => setNewDateValue(e.target.value)}
-                      className="w-full pl-12 pr-4 py-4 bg-slate-50 border-2 border-slate-100 rounded-2xl focus:outline-none focus:border-blue-600 focus:bg-white transition-all font-black text-slate-900 uppercase tracking-tight"
-                    />
+      {
+        datePickerModal.isOpen && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4 animate-in fade-in duration-300">
+            <div className="bg-white rounded-[32px] shadow-2xl max-w-md w-full overflow-hidden border border-slate-100 animate-in zoom-in-95 slide-in-from-bottom-8 duration-300">
+              <div className="bg-blue-600 p-8 text-white relative">
+                <button
+                  onClick={() => setDatePickerModal({ isOpen: false, reportId: '', currentDate: '' })}
+                  className="absolute top-6 right-6 p-2 hover:bg-white/10 rounded-full transition-colors"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+                <div className="flex items-center gap-4 mb-2">
+                  <div className="p-3 bg-white/10 rounded-2xl backdrop-blur-md">
+                    <Calendar className="w-8 h-8 text-white" />
+                  </div>
+                  <div>
+                    <h3 className="text-2xl font-black uppercase tracking-tight">Alterar Data</h3>
+                    <p className="text-blue-100 text-xs font-bold uppercase tracking-widest opacity-80">Ajuste o dia do relatório</p>
                   </div>
                 </div>
+              </div>
 
-                <div className="flex flex-col gap-3 pt-2">
-                  <button
-                    onClick={handleUpdateDate}
-                    disabled={isSyncing}
-                    className="w-full py-5 bg-blue-600 text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-blue-700 active:scale-[0.98] transition-all shadow-lg shadow-blue-200 disabled:opacity-50 flex items-center justify-center gap-2"
-                  >
-                    {isSyncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-                    Salvar Alteração
-                  </button>
-                  <button
-                    onClick={() => setDatePickerModal({ isOpen: false, reportId: '', currentDate: '' })}
-                    className="w-full py-5 bg-slate-100 text-slate-500 rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-slate-200 active:scale-[0.98] transition-all"
-                  >
-                    Manter Atual
-                  </button>
+              <div className="p-8">
+                <div className="space-y-6">
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3 ml-1">Nova Data da Auditoria</label>
+                    <div className="relative group">
+                      <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-blue-600 transition-colors">
+                        <Calendar className="w-5 h-5" />
+                      </div>
+                      <input
+                        type="date"
+                        value={newDateValue}
+                        onChange={(e) => setNewDateValue(e.target.value)}
+                        className="w-full pl-12 pr-4 py-4 bg-slate-50 border-2 border-slate-100 rounded-2xl focus:outline-none focus:border-blue-600 focus:bg-white transition-all font-black text-slate-900 uppercase tracking-tight"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col gap-3 pt-2">
+                    <button
+                      onClick={handleUpdateDate}
+                      disabled={isSyncing}
+                      className="w-full py-5 bg-blue-600 text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-blue-700 active:scale-[0.98] transition-all shadow-lg shadow-blue-200 disabled:opacity-50 flex items-center justify-center gap-2"
+                    >
+                      {isSyncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                      Salvar Alteração
+                    </button>
+                    <button
+                      onClick={() => setDatePickerModal({ isOpen: false, reportId: '', currentDate: '' })}
+                      className="w-full py-5 bg-slate-100 text-slate-500 rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-slate-200 active:scale-[0.98] transition-all"
+                    >
+                      Manter Atual
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
       {/* Container Oculto para Captura de Imagem (Força Layout Desktop) */}
       <div style={{ position: 'absolute', top: '-9999px', left: '-9999px', width: '1452px' }}>
@@ -1268,7 +1394,7 @@ const App: React.FC = () => {
           </div>
         </div>
       </div>
-    </div>
+    </div >
   );
 };
 

@@ -14,14 +14,6 @@ interface AdminPanelProps {
 const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, onProfileUpdate, profile }) => {
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-
-  // Bloqueio de segurança: Se não for admin, não renderiza nada
-  if (profile && profile.role !== 'admin' && pb.authStore.model?.username !== 'admin') {
-    return <div className="p-8 text-center bg-white rounded-3xl shadow-sm">
-      <h2 className="text-xl font-black text-red-600 uppercase">Acesso Negado</h2>
-      <p className="text-slate-500 mt-2">Você não tem permissão para acessar esta área.</p>
-    </div>;
-  }
   const [error, setError] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
@@ -37,7 +29,8 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, onProfileUpdate, p
     username: '',
     password: '',
     role: 'user' as 'admin' | 'user' | 'viewer',
-    loja: ''
+    loja: '',
+    regional: 'NE 2'
   });
 
   // Novos estados para filtro de lojas do admin
@@ -112,14 +105,35 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, onProfileUpdate, p
       const lojasCsv = adminLojas.join(',');
       console.log('💾 Salvando visibleLojas no banco para o usuário:', profile.id, 'Conteúdo:', lojasCsv);
 
-      const profileRecord = await pb.collection('profiles').getFirstListItem(`user="${profile.id}"`, { requestKey: null });
+      let profileRecord: any = null;
+      try {
+        const allProfiles = await pb.collection('profiles').getFullList({
+          filter: `user="${profile.id}"`,
+          sort: '-created',
+          requestKey: null
+        });
+        if (allProfiles.length > 0) {
+          profileRecord = allProfiles[0];
+          for (let i = 1; i < allProfiles.length; i++) {
+            await pb.collection('profiles').delete(allProfiles[i].id).catch(e => { });
+          }
+        }
+      } catch (e) { }
+
+      if (!profileRecord) return;
 
       await pb.collection('profiles').update(profileRecord.id, {
-        visibleLojas: lojasCsv,
         visible_lojas: lojasCsv
       }, { requestKey: null });
 
       console.log('✅ Salvo com sucesso no PocketBase!');
+
+      // LIMPEZA DE CACHE: Garante que o App.tsx recarregue do banco no próximo refresh
+      if (profile.id) {
+        const cacheKey = `pb_profile_${profile.id}`;
+        localStorage.removeItem(cacheKey);
+        console.log('🧹 Cache local limpo:', cacheKey);
+      }
 
       // Notificar o componente App sobre a mudança
       if (onProfileUpdate) {
@@ -153,16 +167,31 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, onProfileUpdate, p
       // No PocketBase, buscamos os perfis
       const records = await pb.collection('profiles').getFullList({
         sort: 'username',
+        requestKey: null // Evita auto-cancelamento
       });
 
-      const mappedUsers: UserProfile[] = records.map(r => ({
-        id: r.user, // Campo 'user' é o ID da relação
-        username: r.username,
-        role: r.role,
-        loja: r.loja
-      }));
+      // Deduplicação na listagem para o Admin
+      const uniqueMap = new Map<string, UserProfile>();
+      records.forEach(r => {
+        // LOG CRÍTICO PARA DESCOBRIR COLUNAS REAIS
+        if (records.indexOf(r) === 0) {
+          console.log('🏗️ [Schema Audit] Colunas reais da coleção profiles:', Object.keys(r));
+        }
 
-      setUsers(mappedUsers);
+        const userData: UserProfile = {
+          id: r.user,
+          username: r.username,
+          role: r.role,
+          loja: r.loja,
+          regional: r.regional || 'NE 2'
+        };
+
+        if (!uniqueMap.has(r.user)) {
+          uniqueMap.set(r.user, userData);
+        }
+      });
+
+      setUsers(Array.from(uniqueMap.values()));
     } catch (err: any) {
       if (!err.isAbort && err.status !== 0) {
         console.error('Fetch users error:', err);
@@ -180,7 +209,8 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, onProfileUpdate, p
         username: user.username,
         password: '',
         role: user.role,
-        loja: user.loja
+        loja: user.loja,
+        regional: user.regional || 'NE 2'
       });
     } else {
       setEditingUser(null);
@@ -188,7 +218,8 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, onProfileUpdate, p
         username: '',
         password: '',
         role: 'user',
-        loja: ''
+        loja: '',
+        regional: 'NE 2'
       });
     }
     setFormError(null);
@@ -211,7 +242,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, onProfileUpdate, p
     try {
       const cleanUsername = formData.username.trim().toLowerCase();
       const cleanLoja = formData.loja.trim() || '204';
-      const internalEmail = cleanUsername.includes('@') ? cleanUsername : `${cleanUsername}@sistema.local`;
+      const internalEmail = cleanUsername.includes('@') ? cleanUsername : `${cleanUsername}@auditoria.com`;
 
       // Validação de senha
       if (formData.password.trim() !== '' && formData.password.length < 8) {
@@ -221,14 +252,46 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, onProfileUpdate, p
       }
 
       if (editingUser) {
-        // 1. Buscar o registro do perfil correspondente
-        const profile = await pb.collection('profiles').getFirstListItem(`user="${editingUser.id}"`);
+        // 1. Buscar TODOS os registros para este usuário para evitar duplicatas silenciadas
+        let profileRecord: any = null;
+        try {
+          const allProfiles = await pb.collection('profiles').getFullList({
+            filter: `user="${editingUser.id}"`,
+            sort: '-created',
+            requestKey: null
+          });
 
-        // 2. Atualizar perfil
-        await pb.collection('profiles').update(profile.id, {
-          role: formData.role,
-          loja: cleanLoja
-        });
+          if (allProfiles.length > 0) {
+            profileRecord = allProfiles[0];
+            // Se houver duplicatas, remove as extras
+            for (let i = 1; i < allProfiles.length; i++) {
+              await pb.collection('profiles').delete(allProfiles[i].id).catch(e => console.error("Erro ao limpar duplicata no save:", e));
+            }
+          }
+        } catch (e) {
+          console.warn("Erro ao buscar registros para deduplicação no save.");
+        }
+
+        // 2. Atualizar ou Criar perfil (Upsert)
+        if (profileRecord) {
+          console.log('📤 [AdminPanel] Atualizando perfil existente:', profileRecord.id, { regional: formData.regional.trim() });
+          const updateRes = await pb.collection('profiles').update(profileRecord.id, {
+            role: formData.role,
+            loja: cleanLoja,
+            regional: formData.regional.trim() || 'NE 2'
+          }, { requestKey: null });
+          console.log('📥 [AdminPanel] Resposta UPDATE perfil:', updateRes);
+        } else {
+          console.log('📤 [AdminPanel] Criando novo perfil para:', editingUser.id);
+          const createRes = await pb.collection('profiles').create({
+            user: editingUser.id,
+            username: cleanUsername,
+            role: formData.role,
+            loja: cleanLoja,
+            regional: formData.regional.trim() || 'NE 2'
+          }, { requestKey: null });
+          console.log('📥 [AdminPanel] Resposta CREATE perfil:', createRes);
+        }
 
         // 3. Atualizar senha no Auth do PocketBase se fornecida
         if (formData.password.trim() !== '') {
@@ -236,7 +299,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, onProfileUpdate, p
             await pb.collection('users').update(editingUser.id, {
               password: formData.password,
               passwordConfirm: formData.password
-            });
+            }, { requestKey: null });
             onShowToast("Usuário e senha atualizados!");
           } catch (passErr: any) {
             console.error('Erro ao atualizar senha:', passErr);
@@ -244,6 +307,21 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, onProfileUpdate, p
           }
         } else {
           onShowToast("Usuário atualizado!");
+        }
+
+        // 4. LIMPEZA DE CACHE CRÍTICA: Garante que o sistema recarregue os dados corretos
+        const cacheKey = `pb_profile_${editingUser.id}`;
+        localStorage.removeItem(cacheKey);
+        console.log('🧹 Cache local do usuário editado removido:', cacheKey);
+
+        // EXTRA: Se o admin editou a si mesmo, sincroniza o App imediatamente
+        if (editingUser.id === profile?.id && onProfileUpdate) {
+          onProfileUpdate({
+            ...editingUser,
+            role: formData.role,
+            loja: cleanLoja,
+            regional: formData.regional || 'NE 2'
+          });
         }
       } else {
         // Criar no PocketBase
@@ -257,7 +335,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, onProfileUpdate, p
             passwordConfirm: formData.password,
             username: cleanUsername,
             name: cleanUsername
-          });
+          }, { requestKey: null });
           console.log('✅ Usuário criado no Auth:', authData.id);
         } catch (authErr: any) {
           console.error('❌ Falha ao criar usuário no Auth:', authErr);
@@ -271,13 +349,13 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, onProfileUpdate, p
               user: authData.id,
               username: cleanUsername,
               role: formData.role,
-              loja: cleanLoja
-            });
+              loja: cleanLoja,
+              regional: formData.regional || 'NE 2'
+            }, { requestKey: null });
             console.log('✅ Perfil criado com sucesso');
           } catch (profileErr: any) {
             console.error('❌ Falha ao criar perfil:', profileErr);
-            // Se o usuário foi criado mas o perfil não, informamos mas não cancelamos tudo
-            onShowToast("Usuário criado (Auth), mas houve erro ao criar o Perfil. Verifique as permissões.");
+            onShowToast("Usuário criado (Auth), mas houve erro ao criar o Perfil.");
             throw new Error(`Usuário criado, mas falha no Perfil: ${profileErr.message}`);
           }
         }
@@ -299,11 +377,15 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, onProfileUpdate, p
     setFormLoading(true);
     try {
       // 1. Deletar perfil
-      const profile = await pb.collection('profiles').getFirstListItem(`user="${userId}"`);
-      await pb.collection('profiles').delete(profile.id);
+      try {
+        const profileRecord = await pb.collection('profiles').getFirstListItem(`user="${userId}"`, { requestKey: null });
+        await pb.collection('profiles').delete(profileRecord.id, { requestKey: null });
+      } catch (e) {
+        console.warn("Perfil não encontrado ao deletar, prosseguindo para o Auth.");
+      }
 
       // 2. Deletar usuário no Auth
-      await pb.collection('users').delete(userId);
+      await pb.collection('users').delete(userId, { requestKey: null });
 
       setConfirmModal({ ...confirmModal, isOpen: false });
       onShowToast("Usuário excluído!");
@@ -317,6 +399,16 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, onProfileUpdate, p
       setFormLoading(false);
     }
   };
+
+  // Bloqueio de segurança: Se não for admin, não renderiza nada
+  if (profile && profile.role !== 'admin' && pb.authStore.model?.username !== 'admin') {
+    return (
+      <div className="p-8 text-center bg-white rounded-3xl shadow-sm max-w-lg mx-auto mt-20">
+        <h2 className="text-xl font-black text-red-600 uppercase">Acesso Negado</h2>
+        <p className="text-slate-500 mt-2">Você não tem permissão para acessar esta área.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 max-w-6xl mx-auto animate-fade-in">
@@ -404,6 +496,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, onProfileUpdate, p
                   <th className="px-8 py-5 text-left text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Usuário</th>
                   <th className="px-8 py-5 text-left text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Nível</th>
                   <th className="px-8 py-5 text-left text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Loja</th>
+                  <th className="px-8 py-5 text-left text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Regional</th>
                   <th className="px-8 py-5 text-right text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Ações</th>
                 </tr>
               </thead>
@@ -429,6 +522,11 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, onProfileUpdate, p
                     <td className="px-8 py-6 whitespace-nowrap">
                       <div className="flex items-center gap-2 text-slate-500 font-bold text-xs uppercase">
                         <Store className="w-4 h-4 opacity-40" /> {user.loja || '---'}
+                      </div>
+                    </td>
+                    <td className="px-8 py-6 whitespace-nowrap">
+                      <div className="flex items-center gap-2 text-slate-500 font-bold text-xs uppercase">
+                        <FileText className="w-4 h-4 opacity-40" /> {user.regional || '---'}
                       </div>
                     </td>
                     <td className="px-8 py-6 whitespace-nowrap text-right">
@@ -525,9 +623,27 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onShowToast, onProfileUpdate, p
                     <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Função</label>
                     <select disabled={formLoading} value={formData.role} onChange={e => setFormData({ ...formData, role: e.target.value as any })} className="w-full px-5 py-4 bg-slate-50 border-2 border-slate-100 rounded-2xl font-black text-slate-700 focus:border-blue-500 outline-none appearance-none"><option value="user">USER</option><option value="viewer">VIEWER</option><option value="admin">ADMIN</option></select>
                   </div>
-                  <div>
-                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Loja</label>
-                    <input type="text" required disabled={formLoading} value={formData.loja} onChange={e => setFormData({ ...formData, loja: e.target.value.toUpperCase() })} className="w-full px-5 py-4 bg-slate-50 border-2 border-slate-100 rounded-2xl font-black text-slate-700 focus:border-blue-500 outline-none" />
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Loja Base</label>
+                      <input
+                        type="text"
+                        placeholder="Ex: 204"
+                        value={formData.loja}
+                        onChange={e => setFormData({ ...formData, loja: e.target.value.toUpperCase() })}
+                        className="w-full px-4 py-3 bg-slate-50 border-2 border-slate-100 rounded-2xl font-bold text-slate-700 focus:bg-white focus:border-blue-500 outline-none transition-all"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Regional</label>
+                      <input
+                        type="text"
+                        placeholder="Ex: NE 2"
+                        value={formData.regional}
+                        onChange={e => setFormData({ ...formData, regional: e.target.value })}
+                        className="w-full px-4 py-3 bg-slate-50 border-2 border-slate-100 rounded-2xl font-bold text-slate-700 focus:bg-white focus:border-blue-500 outline-none transition-all"
+                      />
+                    </div>
                   </div>
                 </div>
               </div>

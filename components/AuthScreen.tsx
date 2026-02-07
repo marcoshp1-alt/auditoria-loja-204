@@ -30,20 +30,33 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
       // Se você configurou para logar com e-mail, usamos o e-mail.
       // Se configurou para logar com username, usamos o username.
       const isEmail = cleanUsername.includes('@');
-      const loginIdentity = isEmail ? cleanUsername : `${cleanUsername}@sistema.local`;
 
-      try {
-        await pb.collection('users').authWithPassword(loginIdentity, password);
-        onLoginSuccess();
-      } catch (authErr: any) {
-        console.error('PocketBase Auth Error:', authErr);
+      const tryLogin = async (identity: string) => {
+        return await pb.collection('users').authWithPassword(identity, password);
+      };
 
-        // Melhoras na mensagem de erro
-        if (authErr.status === 400 || authErr.status === 404) {
-          throw new Error('Usuário não encontrado ou senha incorreta.');
+      if (isEmail) {
+        await tryLogin(cleanUsername);
+      } else {
+        // Usa o último domínio que funcionou ou tenta o novo padrão
+        const lastDomain = localStorage.getItem('last_auth_domain') || '@auditoria.com';
+        const fallbackDomain = lastDomain === '@auditoria.com' ? '@sistema.local' : '@auditoria.com';
+
+        try {
+          await tryLogin(`${cleanUsername}${lastDomain}`);
+          localStorage.setItem('last_auth_domain', lastDomain);
+        } catch (authErr: any) {
+          if (authErr.status === 400 || authErr.status === 404) {
+            console.log(`Tentando domínio alternativo ${fallbackDomain}...`);
+            await tryLogin(`${cleanUsername}${fallbackDomain}`);
+            localStorage.setItem('last_auth_domain', fallbackDomain);
+          } else {
+            throw authErr;
+          }
         }
-        throw new Error(authErr.message || 'Erro ao autenticar no PocketBase.');
       }
+
+      onLoginSuccess();
     } catch (err: any) {
       // Prevenção robusta contra [object Object]
       let finalMessage = 'Erro ao realizar login.';

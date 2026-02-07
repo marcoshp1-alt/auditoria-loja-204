@@ -15,6 +15,8 @@ export interface ClassDetailRow {
   r: string;         // classeRaiz
   l: string;         // local
   s: string;         // situacao
+  d?: number | string; // dias sem venda
+  u?: string;         // ultima compra
 }
 
 export interface RawExcelRow {
@@ -68,5 +70,6 @@ export interface UserProfile {
   username: string;
   role: 'admin' | 'user' | 'viewer';
   loja: string;
+  regional: string;
   visibleLojas?: string[];
 }
